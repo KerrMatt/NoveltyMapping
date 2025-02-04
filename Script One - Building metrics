@@ -1,0 +1,742 @@
+# Information ----
+## Author: M R KERR
+## Last edit: 03-12-2024
+## Summary: Build the novelty metrics from raw data
+## Six novelty metrics are calculated - two using climate data (climate novelty), two using PHYLACINE data (defaunation), one using GBIF data and one using the BII (floristic disruption)
+## Please note that some parts of this analysis are very time and computational intensive, so be careful.
+## You can find the relevant data here:
+### Climate data: https://chelsa-climate.org/ (both palaeo and modern)
+### Ice data: https://www.atmosp.physics.utoronto.ca/~peltier/data.php
+### Defaunation data: https://megapast2future.github.io/PHYLACINE_1.2/
+### GBIF data: https://doi.org/10.15468/dl.6aebcd (a newer GBIF download could yield different results)
+### Alien species checklists from GRIIS: https://zenodo.org/records/6348164
+### BII: https://zenodo.org/records/6348164
+
+# Project Options and Custom Functions ----
+
+## Projection
+proj <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+
+# Library ----
+
+## Housekeeping
+
+library(tidyverse)
+library(tictoc)
+library(data.table)
+library(Matrix)
+library(readxl)
+
+# Parallel
+
+library(doParallel)
+library(foreach)
+
+# GBIF functions
+
+library(rgbif)
+library(CoordinateCleaner)
+
+## Spatial
+
+library(terra)
+library(sf)
+library(spatialEco)
+
+## Plotting
+
+library(scico)
+# remotes::install_github("AllanCameron/geomtextpath")
+library(geomtextpath)
+# devtools::install_github("kassambara/easyGgplot2")
+library(easyGgplot2) # This makes facets easier for my small brain to understand
+
+
+# Precipitation novelty ----
+## Data pointers ----
+## Locate data on server
+datafolder.modern <- "Data/Climate/Modern/CHELSA_pr/"
+datafolder.21k <- "Data/Climate/Palaeo/pr/"
+
+## Spatial baselayer ----
+## Set up a reference raster for cell locations, scale and extent
+## Here we originally used HYDE data, downloaded from their website here: https://geo.public.data.uu.nl/vault-hyde/HYDE%203.3[1710493486]
+ref.raster <- rast("popc_0AD.asc")
+
+## Cell values which are to be taken
+cell.extract <- which(!is.na(values(ref.raster)))
+
+## Extract  values for cells ----
+### Modern values
+for(i in 1986:2018) {
+  # Take modern files from specified folder
+  modern.files <- list.files(datafolder.modern, full.names = T)
+  
+  # Create mean annual
+  temp.raster <- rast(modern.files[grepl(i, modern.files)]) %>%
+    terra::app(., mean, cores = 25)
+  
+  # Save raster in "Processed" file
+  terra::writeRaster(temp.raster, paste(datafolder.modern, "Processed/", i, ".tif", sep = ""))
+  
+  # Save memory:
+  rm(temp.raster)
+  gc()
+}
+
+### Palaeo values
+for(i in -200:20) {
+  # Take palaeo files from specified folder
+  palaeo.files <- list.files(datafolder.21k, full.names = T)
+  
+  ## Create mean for time bin
+  temp.raster <- rast(palaeo.files[grepl(i, palaeo.files)]) %>%
+    terra::app(., mean, cores = 25)
+  
+  # Save raster in "Processed" file
+  terra::writeRaster(temp.raster, paste(datafolder.21k, "Processed/", i, ".tif", sep = ""))
+  
+  # Save memory:
+  rm(temp.raster)
+  gc()
+  
+}
+
+gc()
+
+## Resample and extract values by cell ----
+### Modern values
+modern.files <- list.files(paste(datafolder.modern, "Processed/", sep = ""), full.names = T)
+
+parallel::detectCores()
+cl <- makeCluster(25)
+doParallel::registerDoParallel(cl)
+
+### For each processed modern file, resample to the reference layer and extract the values by cell:
+modern.space <- foreach(i = modern.files, .inorder = TRUE, .combine = cbind) %dopar% {
+  library(terra)
+  temp.raster <- terra::rast(i)
+  temp.raster <- terra::resample(temp.raster, ref.raster)
+  temp.values <- terra::extract(temp.raster, cell.extract)
+  colnames(temp.values) <- i
+  return(temp.values)
+}
+
+colnames(modern.space) <- c(1980:2018)
+
+stopCluster(cl)
+
+### Palaeo values
+palaeo.files <- list.files(paste(datafolder.21k, "Processed/",sep = ""), full.names = T)
+
+parallel::detectCores()
+cl <- makeCluster(25)
+doParallel::registerDoParallel(cl)
+
+### For each processed palaeo file, resample to the reference layer and extract the values by cell:
+palaeo.space <- foreach(i = -200:20, .inorder = TRUE, .combine = cbind) %dopar% {
+  library(terra)
+  temp.raster <- terra::rast(palaeo.files[grepl(paste(i, ".tif", sep = ""), palaeo.files)])
+  temp.raster <- terra::resample(temp.raster, ref.raster)
+  temp.values <- terra::extract(temp.raster, cell.extract)
+  colnames(temp.values) <- i
+  return(temp.values)
+}
+
+stopCluster(cl)
+
+## Calculate novelty ----
+### Create a function which assigns a T or F to each year in the palaeo climate
+### T is novel, F is not novel
+novelty.collect <- function(y, sd.val = NA, novelty.only = T){
+  x <- as.numeric(y)
+  modern <- x[1:39]
+  palaeo <- x[40:260]
+  
+  novelty <- array()
+  magnitude <- array()
+  for(i in seq(2,220,1)){
+    vals.i <- palaeo[c(i-1,i,i+1)]
+    if(!is.na(sd.val)){
+      vals.i.upper <- vals.i + (sd(vals.i, na.rm = T) * sd.val)
+      vals.i.lower <- vals.i - (sd(vals.i, na.rm = T) * sd.val)
+      vals.i <- c(vals.i, vals.i.lower, vals.i.upper)
+      
+    }
+    if(max(vals.i, na.rm = T) < min(modern, na.rm = T) | min(vals.i, na.rm = T) > max(modern, na.rm = T)){
+      novelty[i] <- TRUE
+      if(max(vals.i, na.rm = T) < min(modern, na.rm = T)){
+        magnitude[i] <- (min(modern, na.rm = T) - mean(vals.i, na.rm = T)) * (-1)
+      } else {
+        magnitude[i] <- min(vals.i, na.rm = T) - mean(modern, na.rm = T)
+      }
+    } else {
+      novelty[i] <- FALSE
+      magnitude[i] <- NA
+    }
+  }
+  if(novelty.only){
+    return(novelty)
+  } else {
+    return(rbind(novelty, magnitude))
+  }
+}
+
+### Apply the function to the extracted values
+# Temporarily create a big df of values for each cell:
+modern.temp <- modern.space
+palaeo.temp <- palaeo.space
+total.temp <- cbind(modern.temp, palaeo.temp)
+
+# Run the function
+novelty.wow <-   apply(total.temp,
+                       1,
+                       novelty.collect,
+                       sd.val = 1)
+
+# Check:
+dim(novelty.wow)
+
+## Collect results and map ----
+
+parallel::detectCores()
+cl <- makeCluster(25)
+doParallel::registerDoParallel(cl)
+
+# Turn the logical matrix generated by our function into a year
+
+year.lookup <- seq(18, -199, -1) # the values of the years
+
+novvals <- foreach(i = 1:ncol(novelty.wow), .combine = c, .inorder = TRUE) %dopar% {
+  cell.value <- novelty.wow[,i]
+  #flip so years are in correct order
+  cell.value <- cell.value[length(cell.value):1]
+  #remove 2000 and 1900
+  cell.value <- cell.value[3:length(cell.value)]
+  # find first TRUE
+  year.novel <- year.lookup[min(which(cell.value))]
+  return(year.novel)
+}
+
+# Save results into the reference raster
+precip.novelty <- ref.raster
+precip.novelty[cell.extract] <- novvals
+
+# Turn NAs (no novelty found) into the lowest possible year
+# !is.na(ref.raster) ensures we don't turn non-terrestrial areas
+precip.novelty[which(is.na(precip.novelty[]) & !is.na(ref.raster[]))] <- -200
+
+## Plot and save results ----
+plot(precip.novelty)
+writeRaster(precip.novelty, filename = "CLIMATE_MEANPREC_300.tif",
+            overwrite = T)
+
+
+# Temperature novelty ----
+## Data pointers ----
+## Locate data on server
+datafolder.modern <- "Data/Climate/Modern/CHELSA_tas/"
+datafolder.21k <- "Data/Climate/Palaeo/tas/"
+
+## Spatial baselayer ----
+## Set up a reference raster for cell locations, scale and extent
+## Here we originally used HYDE data, downloaded from their website here: https://geo.public.data.uu.nl/vault-hyde/HYDE%203.3[1710493486]
+ref.raster <- rast("popc_0AD.asc")
+
+## Cell values which are to be taken
+cell.extract <- which(!is.na(values(ref.raster)))
+
+## Extract  values for cells ----
+### Modern values
+for(i in 1986:2018) {
+  # Take modern files from specified folder
+  modern.files <- list.files(datafolder.modern, full.names = T)
+  
+  # Create mean annual
+  temp.raster <- rast(modern.files[grepl(i, modern.files)]) %>%
+    terra::app(., mean, cores = 25)
+  
+  # Save raster in "Processed" file
+  terra::writeRaster(temp.raster, paste(datafolder.modern, "Processed/", i, ".tif", sep = ""))
+  
+  # Save memory:
+  rm(temp.raster)
+  gc()
+}
+
+### Palaeo values
+for(i in -200:20) {
+  # Take palaeo files from specified folder
+  palaeo.files <- list.files(datafolder.21k, full.names = T)
+  
+  ## Create mean for time bin
+  temp.raster <- rast(palaeo.files[grepl(i, palaeo.files)]) %>%
+    terra::app(., mean, cores = 25)
+  
+  # Save raster in "Processed" file
+  terra::writeRaster(temp.raster, paste(datafolder.21k, "Processed/", i, ".tif", sep = ""))
+  
+  # Save memory:
+  rm(temp.raster)
+  gc()
+  
+}
+
+gc()
+
+## Resample and extract values by cell ----
+### Modern values
+modern.files <- list.files(paste(datafolder.modern, "Processed/", sep = ""), full.names = T)
+
+parallel::detectCores()
+cl <- makeCluster(25)
+doParallel::registerDoParallel(cl)
+
+### For each processed modern file, resample to the reference layer and extract the values by cell:
+modern.space <- foreach(i = modern.files, .inorder = TRUE, .combine = cbind) %dopar% {
+  library(terra)
+  temp.raster <- terra::rast(i)
+  temp.raster <- terra::resample(temp.raster, ref.raster)
+  temp.values <- terra::extract(temp.raster, cell.extract)
+  colnames(temp.values) <- i
+  return(temp.values)
+}
+
+colnames(modern.space) <- c(1980:2018)
+
+stopCluster(cl)
+
+### Palaeo values
+palaeo.files <- list.files(paste(datafolder.21k, "Processed/",sep = ""), full.names = T)
+
+parallel::detectCores()
+cl <- makeCluster(25)
+doParallel::registerDoParallel(cl)
+
+### For each processed palaeo file, resample to the reference layer and extract the values by cell:
+palaeo.space <- foreach(i = -200:20, .inorder = TRUE, .combine = cbind) %dopar% {
+  library(terra)
+  temp.raster <- terra::rast(palaeo.files[grepl(paste(i, ".tif", sep = ""), palaeo.files)])
+  temp.raster <- terra::resample(temp.raster, ref.raster)
+  temp.values <- terra::extract(temp.raster, cell.extract)
+  colnames(temp.values) <- i
+  return(temp.values)
+}
+
+stopCluster(cl)
+
+## Calculate novelty ----
+### Create a function which assigns a T or F to each year in the palaeo climate
+### T is novel, F is not novel
+novelty.collect <- function(y, sd.val = NA, novelty.only = T){
+  x <- as.numeric(y)
+  modern <- x[1:39]
+  palaeo <- x[40:260]
+  
+  novelty <- array()
+  magnitude <- array()
+  for(i in seq(2,220,1)){
+    vals.i <- palaeo[c(i-1,i,i+1)]
+    if(!is.na(sd.val)){
+      vals.i.upper <- vals.i + (sd(vals.i, na.rm = T) * sd.val)
+      vals.i.lower <- vals.i - (sd(vals.i, na.rm = T) * sd.val)
+      vals.i <- c(vals.i, vals.i.lower, vals.i.upper)
+      
+    }
+    if(max(vals.i, na.rm = T) < min(modern, na.rm = T) | min(vals.i, na.rm = T) > max(modern, na.rm = T)){
+      novelty[i] <- TRUE
+      if(max(vals.i, na.rm = T) < min(modern, na.rm = T)){
+        magnitude[i] <- (min(modern, na.rm = T) - mean(vals.i, na.rm = T)) * (-1)
+      } else {
+        magnitude[i] <- min(vals.i, na.rm = T) - mean(modern, na.rm = T)
+      }
+    } else {
+      novelty[i] <- FALSE
+      magnitude[i] <- NA
+    }
+  }
+  if(novelty.only){
+    return(novelty)
+  } else {
+    return(rbind(novelty, magnitude))
+  }
+}
+
+### Apply the function to the extracted values
+# Temporarily create a big df of values for each cell:
+modern.temp <- modern.space
+palaeo.temp <- palaeo.space
+total.temp <- cbind(modern.temp, palaeo.temp)
+
+# Run the function
+novelty.wow <-   apply(total.temp,
+                       1,
+                       novelty.collect,
+                       sd.val = 1)
+
+# Check:
+dim(novelty.wow)
+
+## Collect results and map ----
+
+parallel::detectCores()
+cl <- makeCluster(25)
+doParallel::registerDoParallel(cl)
+
+# Turn the logical matrix generated by our function into a year
+
+year.lookup <- seq(18, -199, -1) # the values of the years
+
+novvals <- foreach(i = 1:ncol(novelty.wow), .combine = c, .inorder = TRUE) %dopar% {
+  cell.value <- novelty.wow[,i]
+  #flip so years are in correct order
+  cell.value <- cell.value[length(cell.value):1]
+  #remove 2000 and 1900
+  cell.value <- cell.value[3:length(cell.value)]
+  # find first TRUE
+  year.novel <- year.lookup[min(which(cell.value))]
+  return(year.novel)
+}
+
+# Save results into the reference raster
+temperature.novelty <- ref.raster
+temperature.novelty[cell.extract] <- novvals
+
+# Turn NAs (no novelty found) into the lowest possible year
+# !is.na(ref.raster) ensures we don't turn non-terrestrial areas
+temperature.novelty[which(is.na(temperature.novelty[]) & !is.na(ref.raster[]))] <- -200
+
+## Plot and save results ----
+plot(temperature.novelty)
+writeRaster(temperature.novelty, filename = "CLIMATE_MEANTEMP_300.tif",
+            overwrite = T)
+
+# Defaunation novelty ----
+
+# Load PHYLACINE
+# traits
+mam <- read.csv("/PHYLACINE/Traits/Trait_data.csv")
+
+# maps
+cu.maps <- read_rds(file = "../Defaunation/phylacine.1.2.1.cu.maps.rds")
+pn.maps <- read_rds(file = "../Defaunation/phylacine.1.2.1.pn.maps.rds")
+
+# base.map
+base.map <- raster("../Defaunation/base.map.tif")
+
+# Excluded species
+bat.order <- "Chiroptera"
+sea.cow.order <- "Sirenia"
+whale.families <- c("Balaenidae", "Balaenopteridae", "Ziphiidae",
+                    "Neobalaenidae", "Delphinidae", "Monodontidae",
+                    "Eschrichtiidae", "Iniidae", "Physeteridae",
+                    "Phocoenidae", "Platanistidae")
+seal.families <- c("Otariidae", "Phocidae", "Odobenidae")
+marine.carnivores <- c("Enhydra_lutris", "Lontra_felina")
+polar.bear <- "Ursus_maritimus"
+humans <- "Homo_sapiens"
+
+# Terrestrial species list:
+terrestrial <- mam %>%
+  filter(!Order.1.2 %in% c(bat.order, sea.cow.order),
+         !Family.1.2 %in% c(whale.families, seal.families),
+         !Binomial.1.2 %in% c(marine.carnivores, polar.bear, humans)) %>%
+  pull(Binomial.1.2)
+
+# Make sure maps are lined up with phylacine
+terrestrial.rows <- which(row.names(cu.maps) %in% terrestrial)
+cu.maps <- cu.maps[terrestrial.rows, ]
+pn.maps <- pn.maps[terrestrial.rows, ]
+stopifnot(rownames(cu.maps) == terrestrial)
+
+## Richness change ----
+
+## Remove cases where a species is gained
+cu.maps[which(cu.maps[1:length(cu.maps)] > pn.maps[1:length(pn.maps)])] <- 0
+
+cu.div <- colSums(cu.maps)
+pn.div <- colSums(pn.maps)
+
+delta.richness.raw <- cu.div - pn.div
+
+## Convert to number of species lost, so that high = high novelty
+delta.richness.raw <- delta.richness.raw * (-1)
+
+## Anywhere without mammals to begin with cannot be defaunated, so we can set them to 0
+delta.richness.raw[which(pn.div == 0)] <- 0
+
+## Map a map of total possible richness
+com.maps <- cu.maps + pn.maps
+com.maps[com.maps > 1] <- 1
+com.div <- colSums(com.maps)
+
+## Divide by natural richness to get # species lost
+delta.richness <- log10((delta.richness.raw) / pn.div)
+# delta.richness <- delta.richness.raw # Not richness corrected
+
+## Anywhere without mammals to begin with cannot be defaunated, so we can set them to NA
+delta.richness[which(pn.div == 0)] <- NA
+delta.richness[which(pn.div < cu.div)] <- NA
+
+
+delta.richness.map <- base.map
+delta.richness.map[] <- delta.richness
+
+plot(delta.richness.map)
+
+defaunation_rich <- project(rast(delta.richness.map), proj)
+
+
+## Mass change ----
+
+# (there are some weird artefacts when there are no mammals in the current which
+# you have to exclude i think)
+
+cu.max <- apply(cu.maps * mam$Mass.g[terrestrial.rows], 2, max)
+pn.max <- apply(pn.maps * mam$Mass.g[terrestrial.rows], 2, max)
+
+delta.mass <- log10(cu.max+1) - log10(pn.max+1)
+
+delta.mass.map <- base.map
+delta.mass.map[] <- delta.mass
+
+## Anywhere without mammals to begin with cannot be defaunated
+delta.mass.map[which(pn.div == 0)] <- NA
+delta.mass.map[which(pn.div < cu.div)] <- NA
+
+plot(delta.mass.map)
+
+## Flip so high mass loss is high novelty
+delta.mass.map <- delta.mass.map * (-1)
+
+defaunation_mass <- project(rast(delta.mass.map), proj) 
+
+writeRaster(defaunation_mass, overwrite = T,
+            filename = "DEFAUNATION_MASS.tif")
+writeRaster(defaunation_rich, overwrite = T,
+            filename = "DEFAUNATION_RICHNESS.tif")
+
+# Globalisation novelty ----
+
+## Non-native species proportion ----
+
+
+## GBIF (big dataset warning, can use select to reduce for now)
+GBIF_occ <- fread("GBIF_specieschecked.csv", select = c("decimalLongitude", "decimalLatitude", "species", "countryCode", "year"))
+
+
+## Nativeness data
+GRIIS <- fread("/GRIIS - Country Compendium V1_0.csv")
+
+### GBIF cleaning ----
+
+#### Basic cleaning ----
+GBIF_occ <- GBIF_occ[which(GBIF_occ$year >= 1950),] # Anthropocene
+
+#### Coordinates ----
+GBIF_checkcoord <- clean_coordinates(GBIF_occ, value = "flagged", tests = c("capitals", "centroids", "equal", "zeros", "institutions"))
+
+#### Taxonomy ----
+
+GBIF_species <- unique(GBIF_occ$species)
+
+### Check in batches
+GBIF_check <- name_backbone_checklist(name = as.character(GBIF_species[1]),
+                                      kingdom = rep("Plantae", 1),
+                                      strict = TRUE)
+
+for(i in seq(2, length(GBIF_species), 10000)){
+  if((i + 9999) > length(GBIF_species)){
+    batch_names <- GBIF_species[(i:length(GBIF_species))]
+  } else {
+    batch_names <- GBIF_species[i:(i+9999)]
+  }
+  
+  name_check <- name_backbone_checklist(name = as.character(batch_names),
+                                        kingdom = rep("Plantae", length(batch_names)),
+                                        strict = TRUE)
+  
+  GBIF_check <- bind_rows(GBIF_check, name_check)
+  
+  print(i/length(GBIF_species))
+  
+}
+
+### Remove no match
+table(GBIF_check$matchType)
+
+GBIF_occ <- GBIF_occ[which(GBIF_occ$species %in% GBIF_check$species[which(GBIF_check$matchType == "EXACT")]),]
+
+### Correct synonyms
+
+syn_list <- GBIF_check[which(GBIF_check$synonym),]
+syn_replace <- ifelse(!is.na(match(GBIF_occ$species, syn_list$verbatim_name)), syn_list$species[match(GBIF_occ$species, syn_list$verbatim_name)], GBIF_occ$species)
+
+GBIF_occ$speciesOld <- GBIF_occ$species
+GBIF_occ$species <- syn_replace
+
+### Clear unused objects for RAM conservation
+rm(GBIF_species)
+rm(GBIF_check)
+rm(name_check)
+rm(syn_list)
+rm(syn_replace)
+rm(batch_names)
+
+gc()
+
+### Nativeness check ----
+
+## Reference raster
+ref.raster <- rast("popc_0AD.asc")
+
+
+### GRIIS ----
+
+# Unique plant and country combinations
+country_species <- data.table(GBIF_occ$country,
+                              GBIF_occ$species) %>%
+  unique()
+
+parallel::detectCores()
+cl <- makeCluster(25)
+doParallel::registerDoParallel(cl)
+
+species_nativeness <- foreach(i = 1:nrow(country_species), .combine = c) %dopar% {
+  select_species <- country_species$V2[i]
+  select_country <- country_species$V1[i]
+  if(select_species %in% GRIIS$species){
+    select_GRIIS <- GRIIS[which(GRIIS$species == select_species),]
+    
+    if(select_country %in% select_GRIIS$countryCode_alpha2) {
+      
+      select_GRIIS2 <- select_GRIIS[which(select_GRIIS$countryCode_alpha2 == select_country),]
+      
+      return(select_GRIIS2$establishmentMeans[1])
+      
+    } else {
+      return("NATIVE")
+    }
+    
+  } else {
+    return("UNKNOWN")
+  }
+}
+
+stopCluster(cl)
+
+prov_lookup <- data.frame(species = country_species$V2,
+                          countryCode = country_species$V1,
+                          nativeness = species_nativeness)
+
+GBIF_merge <- GBIF_occ %>%
+  left_join(prov_lookup, by = c("species", "countryCode"))
+
+### Cell assignment ----
+cell.extract <- which(!is.na(values(ref.raster)))
+
+ref.raster[cell.extract] <- cell.extract
+coord_batch <- data.frame(x = GBIF_merge$decimalLongitude, y = GBIF_merge$decimalLatitude)
+
+celln <- terra::extract(ref.raster, coord_batch)
+
+GBIF_occ <- cbind(GBIF_merge,
+                  data.frame(celln = celln$popc_0AD))
+
+write.csv(GBIF_occ, "GBIF_minimal_analysisready_1950.csv")
+
+rm(GBIF_merge)
+
+### Mapping ----
+## If starting from this point, read in file
+GBIF_occ <- fread("GBIF_minimal_analysisready.csv")
+
+unweighted_GBIF <- GBIF_occ[,c("species", "nativeness", "celln")] %>%
+  unique()
+
+nativeness_table <- table(unweighted_GBIF$nativeness, unweighted_GBIF$celln)
+
+nativeness_prop <- nativeness_table[1,]/colSums(nativeness_table)
+
+prep.raster <- rast("popc_0AD.asc")
+prep.raster[cell.extract] <- NA
+
+prep.raster[as.numeric(names(nativeness_prop))] <- nativeness_prop
+names(prep.raster) <- "PropNonNative"
+
+tiff(filename = "ModernNovelty/BioticGain10km_1950.tiff", res = 300, width = 4320, height = 2160)
+plot(prep.raster, col = scico::scico(218, palette = "batlow", direction = 1), maxcell = 10000000)
+dev.off()
+
+terra::writeRaster(prep.raster, "GLOBALISATION_BIOTIC.tif", overwrite = T)
+
+## Restrict to 10 species per cell
+cellmin <- table(unweighted_GBIF$celln)
+cellmin <- cellmin[which(cellmin >= 10)]
+cellmin <- names(cellmin)
+
+unweighted_GBIF <- unweighted_GBIF[which(unweighted_GBIF$celln %in% cellmin),]
+
+nativeness_table <- table(unweighted_GBIF$nativeness, unweighted_GBIF$celln)
+
+nativeness_prop <- nativeness_table[1,]/colSums(nativeness_table)
+
+prep.raster <- rast("popc_0AD.asc")
+prep.raster[cell.extract] <- NA
+
+prep.raster[as.numeric(names(nativeness_prop))] <- nativeness_prop
+
+mollweide_proj <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+prep.raster <- terra::project(prep.raster, y = mollweide_proj)
+
+tiff(filename = "ModernNovelty/BioticGain10km_1950_10species.tiff", res = 300, width = 4320, height = 2160)
+plot(prep.raster, col = scico::scico(218, palette = "batlow", direction = 1), maxcell = 10000000, colNA = NULL, box = F, axes = F,
+     plg=list(x = "bottom", title="Proportion NonNative Species", title.cex=0.9, horiz = T, title.adj = -10))
+dev.off()
+
+## Sample size
+sample.tab <- colSums(nativeness_table)
+
+prep.raster <- rast("popc_0AD.asc")
+prep.raster[cell.extract] <- NA
+
+prep.raster[as.numeric(names(sample.tab))] <- log10(as.numeric(sample.tab))
+
+names(prep.raster) <- "GBIF_RECORD_COUNT"
+
+tiff(filename = "ModernNovelty/SampleSize.tiff", res = 300, width = 4320, height = 2160)
+plot(prep.raster, col = scico::scico(218, palette = "batlow", direction = 1), maxcell = 10000000)
+dev.off()
+
+terra::writeRaster(prep.raster, "GBIF_SAMPLE.tif", overwrite = T)
+# Richness
+
+richness.df <- data.frame(CELL = GBIF_occ$celln,
+                          SPECIES = GBIF_occ$species)
+richness.df <-  unique(richness.df)
+
+richness.tab <- table(richness.df$CELL)
+
+prep.raster <- rast("popc_0AD.asc")
+prep.raster[cell.extract] <- NA
+
+prep.raster[as.numeric(names(richness.tab))] <- as.numeric(richness.tab)
+
+names(prep.raster) <- "richness"
+
+terra::writeRaster(prep.raster, "GBIF_RICHNESS.tif", overwrite = T)
+
+
+## Intactness Index ----
+
+### Load in BII from Newbold et al
+bii <- rast("lbii.asc")
+
+### Modify BII to be change from original abundance
+bii <- abs(bii - 1)
+
+### Reproject and save
+change_intact <- bii %>%
+  project(., proj)
+
+writeRaster(change_intact, "CHANGE_INTACTNESS.tif")
