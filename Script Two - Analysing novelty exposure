@@ -1,0 +1,872 @@
+# Information ----
+## Author: M R KERR
+## Last edit: 03-12-2024
+## Summary: Run analysis using the novelty layers, both spatial and within PAs/KBAs
+## You can find the relevant data here:
+### Novelty layers: https://zenodo.org/records/14677612
+### Climate regions: http://www.gloh2o.org/koppen
+### Biomes: https://doi.org/10.1111/geb.13574
+### WDPA: https://www.protectedplanet.net
+### KBA: keybiodiversityareas.org (by request)
+
+# Optionally clear everything:
+# rm(list = ls()); gc()
+
+# Project Options and Custom Functions ----
+## Projection to use:
+
+proj <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+
+
+## Scale rasters between 0 and 1
+rasterzerotoone <- function(y){
+  
+  x <- y
+  
+  x[is.infinite(x)] <- 0
+  
+  a <- x + abs(min(values(x), na.rm = T))
+  
+  b <- a/max(values(a), na.rm = T)
+  
+  return(b)
+  
+}
+
+
+# Library ----
+
+library(broom)
+
+## Housekeeping
+
+library(tidyverse)
+library(tictoc)
+library(data.table)
+
+## Stats
+library(effectsize)
+library(multcomp)
+library(esvis)
+
+# Parallel
+
+library(doParallel)
+library(foreach)
+
+# GBIF functions
+
+library(rgbif)
+library(CoordinateCleaner)
+
+## Spatial
+
+library(terra)
+library(sf)
+library(spatialEco)
+
+## Plotting
+library(tidyterra)
+library(scico)
+# remotes::install_github("AllanCameron/geomtextpath")
+library(geomtextpath)
+# devtools::install_github("kassambara/easyGgplot2")
+library(easyGgplot2) # This makes facets easier for my small brain to understand
+library(ggridges)
+library(tricolore)
+library(ggtern)
+library(patchwork)
+
+# Data Load ----
+## All layers were created in part one of the document
+
+## Reference raster ----
+celln.raster <- rast("cell_numbers.tif")
+
+cell.extract <- which(!is.na(values(celln.raster)))
+
+extent.total <- ext(celln.raster)
+
+cell.coords <- xyFromCell(object = celln.raster, cell = cell.extract)
+
+### Using the cell coords of the reference raster will spped things up when extracting later
+cell.coords <- data.frame(cell.coords)
+
+## Novelty Metrics ----
+## Load in the six novelty metrics, and resample to the correct proj
+
+### Climate ----
+climate_mat <- rast("../Processed Data Layers/CLIMATE_MEANTEMP_300_logsd.tif") %>%
+  project(., proj)
+
+climate_map <- rast("../Processed Data Layers/CLIMATE_MEANPREC_300_logsd.tif") %>%
+  project(., proj)
+
+## Ice correction
+mat_ice <- which(climate_mat[] < ice_check[])
+climate_mat[mat_ice] <- ice_check[mat_ice]
+
+map_ice <- which(climate_map[] < ice_check[])
+climate_map[map_ice] <- ice_check[map_ice]
+
+### Defaunation ----
+defaunation_rich <- rast("../Processed Data Layers/DEFAUNATION_RICHNESS.tif") %>%
+  resample(., climate_map)
+
+defaunation_mass <- rast("../Processed Data Layers/DEFAUNATION_MASS.tif") %>%
+  resample(., climate_map)
+
+### Nonnatives ----
+change_native <- rast("../Processed Data Layers/CHANGE_NATIVE_RAW.tif")
+
+#### Correct for sample size and species requirements if needed ----
+nativeness_sample <- rast("../Processed Data Layers/CHANGE_NATIVE_SAMPLE.tif")
+nativeness_richness <- rast("../Processed Data Layers/CHANGE_NATIVE_SPECIES.tif")
+
+change_native[which(nativeness_sample[] < 10)] <- NA
+change_native[which(nativeness_richness[] < 10)] <- NA
+
+rm(nativeness_richness)
+rm(nativeness_sample)
+
+change_native <- change_native %>%
+  project(., proj)
+
+### Inactness ----
+
+change_intact <- rast("../Processed Data Layers/CHANGE_INTACTNESS.tif")
+
+## WDPA ----
+## Load in the WDPA polygons
+wdpa.shp0 <- sf::read_sf("WDPA_shp/WDPA_Feb2024_Public_shp_0/Polygons/")
+wdpa.shp1 <- sf::read_sf("WDPA_shp/WDPA_Feb2024_Public_shp_1/Polygons/")
+wdpa.shp2 <- sf::read_sf("WDPA_shp/WDPA_Feb2024_Public_shp_2/Polygons/")
+
+wdpa.polygons <- rbind(wdpa.shp0, wdpa.shp1, wdpa.shp2) %>%
+  filter(., MARINE == 0, STATUS != "Proposed", IUCN_CAT %in% c("II", "III", "IV", "Ia", "Ib", "V", "VI")) %>%
+  st_buffer(., 0) %>%
+  st_crop(., st_bbox(c(xmin = -180, xmax = 180, ymin = -90, ymax = 90))) %>%
+  sf::st_transform(crs = proj)
+rm(wdpa.shp0)
+rm(wdpa.shp1)
+rm(wdpa.shp2)
+
+
+## KBA----
+## Load in the KBAs
+kba.poly <- sf::read_sf("KBAsGlobal_2022_September_02_POL.shp") %>%
+  st_buffer(., 0) %>%
+  st_crop(., st_bbox(c(xmin = -180, xmax = 180, ymin = -90, ymax = 90))) %>%
+  sf::st_transform(crs = proj)
+
+## Climate regions ----
+## Load in the climate region map
+climate_regions <- rast("ModernNovelty/c1976_2000_0/koppen_geiger_0p1.tif") %>%
+  project(proj, threads = T, method = "near") %>%
+  resample(climate_mat, method = "near", threads = T)
+
+## Need to correct for projection oddities, quickest way is to expand the coastlines out:
+climate_regions <- focal(climate_regions, 11, "modal", na.policy="only", na.rm = T)
+
+names(climate_regions) <- "ClimateRegion"
+
+## Change numbers to be broad climate categories:
+climate_region.key <- data.frame(x = 1:30,
+                        climate_regions = c(
+                          rep("Tropical", 3),
+                          rep("Arid", 4),
+                          rep("Temperate", 9),
+                          rep("Cold", 12),
+                          rep("Polar", 2)
+                        ))
+
+## Biomes ----
+## Load in biome catalog
+biome_regions <- rast("Biomes/Fisher et al 2022_AppendS2.tif") %>%
+  resample(climate_mat, method = "near", threads = T)
+
+## Like climate, create a key (taken from the notes in Fischer et al 2024, https://doi.org/10.1111/geb.13574)
+## We chose to use layer one, which is biome data from Allen et al 2020, https://doi.org/10.1111/jbi.13930)
+biome_region.key1 <- data.frame(x = 1:21,
+                                biome_regions = c(
+                                  "Tropical evergreen forest",
+                                  "Tropical raingreen forest",
+                                  "Savanna",
+                                  "Tropical grassland",
+                                  "Warm temperate woodland",
+                                  "Desert",
+                                  "Temperate broadleaf evergreen forest",
+                                  "Semidesert",
+                                  "Temperate shrubland",
+                                  "Temperate needleleaf evergreen forest",
+                                  "Steppe",
+                                  "Temperate parkland",
+                                  "Temperate summergreen forest",
+                                  "Temperate mixed forest",
+                                  "Boreal parkland",
+                                  "Tundra",
+                                  "Boreal summergreen broadleaf forest",
+                                  "Boreal evergreen needleleaf forest",
+                                  "Boreal summergreen needleleaf forest",
+                                  "Shrub tundra",
+                                  "Boreal woodland"
+                                ),
+                                biome_code = c(
+                                  "TrEF",
+                                  "TrRF",
+                                  "SAV",
+                                  "TrGL",
+                                  "WTW",
+                                  "DES",
+                                  "TBF",
+                                  "SDES",
+                                  "TeSL",
+                                  "TeNF",
+                                  "STE",
+                                  "TePL",
+                                  "TeSF",
+                                  "TeMF",
+                                  "BPL",
+                                  "TUN",
+                                  "BSBF",
+                                  "BEF",
+                                  "BSNF",
+                                  "STUN",
+                                  "BWL"
+                                ))
+
+# Analysis zero: Total novelty ----
+## Scale all the novelty metrics between zero and one
+climate_mat_scaled <- rasterzerotoone(climate_mat)
+climate_map_scaled <- rasterzerotoone(climate_map)
+
+defaunation_rich_scaled <- rasterzerotoone(defaunation_rich)
+defaunation_mass_scaled <- rasterzerotoone(defaunation_mass)
+
+change_native_scaled <- rasterzerotoone(change_native)
+change_intact_scaled <- rasterzerotoone(change_intact)
+
+## Set all NA values in places which shouldn't have NAs to 0 (no novelty)
+## We use climate as the base here because we have perfect data
+## This is just because of changes in the base layers projection and resampling
+## Setting them to 0 rather than interpolating means we always underestimate
+
+defaunation_rich_scaled[which(is.na(defaunation_rich_scaled[]) & !is.na(climate_mat_scaled[]))] <- 0
+defaunation_mass_scaled[which(is.na(defaunation_mass_scaled[]) & !is.na(climate_mat_scaled[]))] <- 0
+
+defaunation_rich_scaled[which(is.na(climate_mat_scaled[]))] <- NA
+defaunation_mass_scaled[which(is.na(climate_mat_scaled[]))] <- NA
+
+change_intact_scaled[which(is.na(change_intact_scaled[]) & !is.na(climate_mat_scaled[]))] <- 0
+
+# Alternative: If We want to analyse only cells with biodiversity data:
+  # change_native_scaled[which(is.na(change_native_scaled[]))] <- NA
+  # change_intact_scaled[which(is.na(change_native_scaled[]))] <- NA
+  # defaunation_mass_scaled[which(is.na(change_native_scaled[]))] <- NA
+  # defaunation_rich_scaled[which(is.na(change_native_scaled[]))] <- NA
+  # climate_mat_scaled[which(is.na(change_native_scaled[]))] <- NA
+  # climate_map_scaled[which(is.na(change_native_scaled[]))] <- NA
+
+# Set cells with no biodiversity data at all to 0
+change_native_scaled[which(is.na(change_native_scaled[]) & !is.na(climate_mat_scaled[]))] <- 0
+
+## Give equal weighting: ----
+climate.novelty <- (climate_mat_scaled + climate_map_scaled) / 2
+names(climate.novelty) <- "Climate"
+
+defaunation.novelty <- (defaunation_rich_scaled + defaunation_mass_scaled) / 2
+names(defaunation.novelty) <- "Defaunation"
+
+change.novelty <- (change_intact_scaled + change_native_scaled) / 2
+names(change.novelty) <- "Community Change"
+
+total.novelty <- (climate.novelty + defaunation.novelty + change.novelty) / 3
+names(total.novelty) <- "Total"
+
+writeRaster(total.novelty, filename = "NOVELTY_TOTAL.tif",
+            overwrite = T)
+
+# Alternative: ignore the alien species 
+ total.novelty <- (climate_mat_scaled + climate_map_scaled + defaunation_rich_scaled + defaunation_mass_scaled + change_intact_scaled) / 5
+ names(total.novelty) <- "Total"
+
+
+# Analysis one: Spatial analysis of novelty ----
+## Create a data frame with every aspect of novelty (per cell)
+
+novelty.climate_regions <- data.frame(
+  Climate = extract(climate.novelty, cell.coords)$Climate,
+  Defaunation = extract(defaunation.novelty, cell.coords)$Defaunation,
+  Community = extract(change.novelty, cell.coords)$'Community Change',
+  Total = extract(total.novelty, cell.coords)$Total,
+  ClimateRegion = floor(as.numeric(extract(climate_regions, cell.coords, method = "bilinear")$ClimateRegion)),
+  Biome = as.numeric(extract(biome_regions, cell.coords, method = "simple")$Biome_Inventory_layer_01)
+)
+
+## change climate_region numbers to be the broad regions and biome numbers to be the factors
+
+for(i in 1:nrow(climate_region.key)){
+  novelty.climate_regions$ClimateRegion[which(novelty.climate_regions$ClimateRegion == climate_region.key$x[i])] <- climate_region.key$climate_regions[i]
+}
+
+for(i in 1:nrow(biome_region.key1)){
+  novelty.climate_regions$Biome[which(novelty.climate_regions$Biome == biome_region.key1$x[i])] <- biome_region.key1$biome_code[i]
+}
+
+novelty.climate_regions$ClimateRegion <- factor(novelty.climate_regions$ClimateRegion, levels = c("Polar", "Cold", "Temperate", "Arid", "Tropical"))
+novelty.climate_regions$Biome <- factor(novelty.climate_regions$Biome, levels = biome_region.key1[,3])
+
+## Relative contribution of each axis
+novelty.contributions <- c(climate.novelty, defaunation.novelty, change.novelty)
+
+novelty.contributions <- novelty.contributions / sum(novelty.contributions)
+
+## Total biosphere stats ----
+
+novelty.globalvalues <- total.novelty[][which(!is.na(total.novelty[]))]
+
+quantile(novelty.globalvalues, na.rm = T, probs = c(0.01, 0.05, 0.5, 0.95, 0.99))
+sd(novelty.globalvalues)
+
+## Higher than thresholds
+length(which(novelty.globalvalues > 0.33))/length(novelty.globalvalues)
+
+## Differences between regions ----
+
+### Effect size table
+pairwised_initial <- novelty.climate_regions %>% 
+  hedg_g(Total~ ClimateRegion)
+
+pairwised_initial
+
+write.csv(create_pairwise_matrix(pairwised_initial), file = "Supplement/total.csv")
+
+
+# Individual metrics too
+pairwised_initial.climate <- novelty.climate_regions %>% 
+  hedg_g(Climate ~ ClimateRegion)
+
+pairwised_initial.climate
+
+write.csv(create_pairwise_matrix(pairwised_initial.climate), file = "Supplement/climate.csv")
+
+
+pairwised_initial.defaun <- novelty.climate_regions %>% 
+  hedg_g(Defaunation ~ ClimateRegion)
+
+pairwised_initial.defaun
+
+write.csv(create_pairwise_matrix(pairwised_initial.defaun), file = "Supplement/defaunation.csv")
+
+
+pairwised_initial.globe <- novelty.climate_regions %>% 
+  hedg_g(Community ~ ClimateRegion)
+
+pairwised_initial.globe
+
+write.csv(create_pairwise_matrix(pairwised_initial.globe), file = "Supplement/disruption.csv")
+
+
+# Analysis two: Novelty within protected space ----
+### Build a raster of cells which are in and out of different categories
+
+## Set seed for repro:
+set.seed(31415)
+
+
+## Comparison between in WDPA and not in WDPA ----
+
+# Protection:
+protection_status <- total.novelty
+protection_status[] <- NA
+protection_status[][which(!is.na(total.novelty[]))] <- -1
+
+wdpa.vect <- vect(wdpa.polygons)
+
+frac_cover.wdpa <- rasterize(wdpa.vect, protection_status, field=NULL, touches=TRUE, cover = T)
+
+protection_status[][which(frac_cover.wdpa[] > 0.5)] <- 1
+
+## Number of protected cells in high novelty:
+proc.nov.total <- total.novelty[][which(frac_cover.wdpa[] > 0.5)]
+length(proc.nov.total[which(proc.nov.total > (1/3))]) / length(proc.nov.total[])
+
+# Unprotected raster:
+protection_no <- protection_status < 0
+
+### Run simulation for WDPA ----
+# For each area, we divide it into its climate regions
+# We then randomly sample an equal space from that which is unprotected within the same region
+# We then save all the metrics inside this new space for the output
+
+parallel::detectCores()
+cl <- makeCluster(28)
+doParallel::registerDoParallel(cl)
+
+# wrap(protection_status)
+# wrap(climate_regions)
+# wrap(total.novelty)
+
+# Each climate region indepent
+for(i in unique(climate_region.key$climate_regions)){
+  climate_temp <- climate_regions %in% climate_region.key$x[which(climate_region.key$climate_regions == i)]
+  names(climate_temp) <- i
+  
+  climate_temp <- climate_temp & protection_no
+  
+  if(i == unique(climate_region.key$climate_regions)[1]){
+    climate_out <- climate_temp
+  } else {
+    climate_out <- c(climate_out, climate_temp)
+  }
+}
+
+# save for quicker loading inside the foreach: 
+# terra::writeRaster(climate_out, "climate_out.tif", overwrite = T)
+# terra::writeRaster(protection_status, "protectionstatus.tif", overwrite = T)
+# terra::writeRaster(climate_regions, "climate_regions.tif", overwrite = T)
+# terra::writeRaster(total.novelty, "total.novelty.tif", overwrite = T)
+# terra::writeRaster(defaunation.novelty, "defaunation_novelty.tif", overwrite = T)
+# terra::writeRaster(climate.novelty, "climate_novelty.tif", overwrite = T)
+# terra::writeRaster(change.novelty, "change.novelty.tif", overwrite = T)
+# terra::writeRaster(protection_no, "protection_no.tif", overwrite = T)
+# terra::writeRaster(frac_cover.wdpa, "protection_frac.tif", overwrite = T)
+
+
+ntrials <- 1000
+tic()
+pa_non_comparison <- foreach(i = 1:nrow(wdpa.polygons), .combine = "rbind", .packages = c("terra", "sf")) %dopar% {
+  
+  frac_cover.wdpa <- rast("protection_frac.tif")
+  
+  ## Take only relevant wdpa
+  pa <- vect(wdpa.polygons[i,])
+  
+  ## Extend the polygon to an area 10x the size
+  
+  extended.pa <- extend(ext(pa), width(pa) * 10) %>%
+    intersect(., ext(frac_cover.wdpa)) # ensure nothing is out of bounds of the globe
+  
+  ## Crop all needed rasters
+  
+  protection_status <- rast("protectionstatus.tif") %>%
+    crop(., extended.pa)
+  climate_regions <- rast("climate_regions.tif") %>%
+    crop(., extended.pa)
+  total.novelty <- rast("total.novelty.tif") %>%
+    crop(., extended.pa)
+  
+  defaunation.novelty <- rast("defaunation_novelty.tif") %>%
+    crop(., extended.pa)
+  climate.novelty <- rast("climate_novelty.tif") %>%
+    crop(., extended.pa)
+  change.novelty <- rast("change.novelty.tif") %>%
+    crop(., extended.pa)
+  
+  protection_no <- rast("protection_no.tif") %>%
+    crop(., extended.pa)
+  climate_out <- rast("climate_out.tif") %>%
+    crop(., extended.pa)
+  
+  ## Restrict to nearby area
+  
+  frac_cover.wdpa <- terra::crop(frac_cover.wdpa, extended.pa)
+  
+  ## Find relevant cells
+  pa.cover <- terra::extract(frac_cover.wdpa, pa, cells = T)
+  pa.cells  <- pa.cover$cell[which(pa.cover$layer > 0.5)]
+  
+  
+  ## Find relevant climate regions
+  pa.climate_regions <- climate_regions[][pa.cells]
+  pa.climate_regions <- pa.climate_regions[!is.na(pa.climate_regions)]
+  
+  # Turn into broad regions
+  for(ii in 1:nrow(climate_region.key)){
+    pa.climate_regions[which(pa.climate_regions == climate_region.key$x[ii])] <- climate_region.key$climate_regions[ii]
+  }
+  
+  # For each collection region, do the sampling
+  
+  collection.region <- unique(pa.climate_regions)
+  poly.collect <- pa
+  for(k in collection.region){
+    inside <-     data.frame(pa = i,
+                             region = k,
+                             trial = 0,
+                             novelty = mean(total.novelty[][pa.cells[which(pa.climate_regions == k)]], na.rm = T),
+                             defaun = mean(defaunation.novelty[][pa.cells[which(pa.climate_regions == k)]], na.rm = T),
+                             climate = mean(climate.novelty[][pa.cells[which(pa.climate_regions == k)]], na.rm = T),
+                             disrupt = mean(change.novelty[][pa.cells[which(pa.climate_regions == k)]], na.rm = T))
+    
+    pa.size <- as.numeric(length(which(pa.climate_regions == k)))
+    
+    # Get the relevant space
+    climate_relevant <- climate_out[k]
+    n.reg <- unique(which(climate_relevant[] > 0))
+    
+    if(length(n.reg) < pa.size){
+      outlist <- data.frame(pa = i,
+                            region = k,
+                            trial = NA,
+                            novelty = NA,
+                            defaun = NA,
+                            climate = NA,
+                            disrupt = NA)
+    } else {
+      # Pre-allocate data frame with appropriate dimensions
+      outlist <- data.frame(
+        pa = rep(i, ntrials),
+        region = rep(k, ntrials),
+        trial = 1:ntrials,
+        novelty = NA,
+        defaun = NA,
+        climate = NA,
+        disrupt = NA
+      )
+      
+      for (j in 1:ntrials) {
+        ## Find a space of equivalent area
+        rc <- sample(n.reg, pa.size)
+        outlist$novelty[j] <- mean(total.novelty[][rc], na.rm = TRUE)
+        outlist$defaun[j] <- mean(defaunation.novelty[][rc], na.rm = T)
+        outlist$climate[j] <- mean(climate.novelty[][rc], na.rm = T)
+        outlist$disrupt[j] <- mean(change.novelty[][rc], na.rm = T)
+      }
+      
+    }
+    
+    
+    if(which(collection.region == k) == 1){
+      pa.outlist <- outlist
+    } else {
+      pa.outlist <- rbind(pa.outlist, outlist)
+    }
+  }
+  
+  pa.outlist <- rbind(inside, pa.outlist)
+  
+  return(pa.outlist)
+  
+}
+toc()
+
+stopCluster(cl)
+
+# Save output
+write.csv(x = pa_non_comparison, "Figures/pa_non_comparison_with.csv")
+
+### Repreat for KBAs ----
+frac_cover.kba <- rasterize(kba.vect, biodiv_status, field=NULL, touches=TRUE, cover=TRUE)
+
+biodiv_status <- total.novelty
+biodiv_status[] <- NA
+biodiv_status[][which(!is.na(total.novelty[]))] <- -1
+
+biodiv_status[][which(frac_cover.kba[] > 0.5)] <- 1
+
+biodiv_no <- biodiv_status < 0
+
+parallel::detectCores()
+cl <- makeCluster(20)
+doParallel::registerDoParallel(cl)
+
+for(i in unique(climate_region.key$climate_regions)){
+  climate_temp <- climate_regions %in% climate_region.key$x[which(climate_region.key$climate_regions == i)]
+  names(climate_temp) <- i
+  
+  climate_temp <- climate_temp & biodiv_no
+  
+  if(i == unique(climate_region.key$climate_regions)[1]){
+    climate_out <- climate_temp
+  } else {
+    climate_out <- c(climate_out, climate_temp)
+  }
+}
+
+terra::writeRaster(climate_out, "climate_out.tif", overwrite = T)
+terra::writeRaster(biodiv_status, "biodivstatus.tif", overwrite = T)
+terra::writeRaster(climate_regions, "climate_regions.tif", overwrite = T)
+terra::writeRaster(total.novelty, "total.novelty.tif", overwrite = T)
+terra::writeRaster(biodiv_no, "biodiv_no.tif", overwrite = T)
+terra::writeRaster(frac_cover.kba, "biodiv_frac.tif", overwrite = T)
+
+ntrials <- 1000
+tic()
+kba_non_comparison <- foreach(i = 1:nrow(kba.poly), .combine = "rbind", .packages = c("terra", "sf")) %dopar% {
+  
+  frac_cover.kba <- rast("biodiv_frac.tif")
+  
+  #wdpa.vect <- vect("wdpavect.gpkg")
+  
+  ## Take only relevant wdpa
+  pa <- vect(kba.poly[i,])
+  
+  extended.pa <- extend(ext(pa), width(pa) * 10) %>%
+    intersect(., ext(frac_cover.kba))
+  
+  if(!is.null(extended.pa)){
+    
+    
+    
+    biodiv_status <- rast("biodivstatus.tif") %>%
+      crop(., extended.pa)
+    climate_regions <- rast("climate_regions.tif") %>%
+      crop(., extended.pa)
+    total.novelty <- rast("total.novelty.tif") %>%
+      crop(., extended.pa)
+    biodiv_no <- rast("biodiv_no.tif") %>%
+      crop(., extended.pa)
+    climate_out <- rast("climate_out.tif") %>%
+      crop(., extended.pa)
+    
+    defaunation.novelty <- rast("defaunation_novelty.tif") %>%
+      crop(., extended.pa)
+    climate.novelty <- rast("climate_novelty.tif") %>%
+      crop(., extended.pa)
+    change.novelty <- rast("change.novelty.tif") %>%
+      crop(., extended.pa)
+    
+    ## Restrict to nearby area
+    
+    frac_cover.kba <- terra::crop(frac_cover.kba, extended.pa)
+    
+    ## Find relevant cells
+    pa.cover <- terra::extract(frac_cover.kba, pa, cells = T)
+    pa.cells  <- pa.cover$cell[which(pa.cover$layer > 0.5)]
+    
+    
+    ## Find relevant climate regions
+    pa.climate_regions <- climate_regions[][pa.cells]
+    pa.climate_regions <- pa.climate_regions[!is.na(pa.climate_regions)]
+    
+    # Turn into broad regions
+    for(ii in 1:nrow(climate_region.key)){
+      pa.climate_regions[which(pa.climate_regions == climate_region.key$x[ii])] <- climate_region.key$climate_regions[ii]
+    }
+    
+    collection.region <- unique(pa.climate_regions)
+    poly.collect <- pa
+    
+    if(!is.null(collection.region)){
+      for(k in collection.region){
+        inside <-     data.frame(pa = i,
+                                 region = k,
+                                 trial = 0,
+                                 novelty = mean(total.novelty[][pa.cells[which(pa.climate_regions == k)]], na.rm = T),
+                                 defaun = mean(defaunation.novelty[][pa.cells[which(pa.climate_regions == k)]], na.rm = T),
+                                 climate = mean(climate.novelty[][pa.cells[which(pa.climate_regions == k)]], na.rm = T),
+                                 disrupt = mean(change.novelty[][pa.cells[which(pa.climate_regions == k)]], na.rm = T))
+        
+        pa.size <- as.numeric(length(which(pa.climate_regions == k)))
+        
+        # Get the relevant space
+        climate_relevant <- climate_out[k]
+        n.reg <- unique(which(climate_relevant[] > 0))
+        
+        if(length(n.reg) < pa.size){
+          outlist <- data.frame(pa = i,
+                                region = k,
+                                trial = NA,
+                                novelty = NA)
+        } else {
+          # Pre-allocate data frame with appropriate dimensions
+          outlist <- data.frame(
+            pa = rep(i, ntrials),
+            region = rep(k, ntrials),
+            trial = 1:ntrials,
+            novelty = NA,
+            defaun = NA,
+            climate = NA,
+            disrupt = NA
+          )
+          
+          for (j in 1:ntrials) {
+            ## Find a space of equivalent area
+            rc <- sample(n.reg, pa.size)
+            outlist$novelty[j] <- mean(total.novelty[][rc], na.rm = TRUE)
+            outlist$defaun[j] <- mean(defaunation.novelty, na.rm = T)
+            outlist$climate[j] <- mean(climate.novelty, na.rm = T)
+            outlist$disrupt[j] <- mean(change.novelty, na.rm = T)
+          }
+          
+        }
+        
+        
+        if(which(collection.region == k) == 1){
+          pa.outlist <- outlist
+        } else {
+          pa.outlist <- rbind(pa.outlist, outlist)
+        }
+      }
+      pa.outlist <- rbind(inside, pa.outlist)
+    } else {
+      pa.outlist <- data.frame(pa = i,
+                               region = NA,
+                               trial = NA,
+                               novelty = NA,
+                               defaun = NA,
+                               climate = NA,
+                               disrupt = NA)
+    }
+    
+    
+  } else {
+    pa.outlist <- data.frame(pa = i,
+                             region = NA,
+                             trial = NA,
+                             novelty = NA,
+                             defaun = NA,
+                             climate = NA,
+                             disrupt = NA)
+  }
+  
+  
+  return(pa.outlist)
+  
+}
+toc()
+write.csv(x = kba_non_comparison, "Figures/kba_non_comparison_with.csv")
+
+## Effect sizes: ----
+kba_non_comparison <- read.csv("D://MatthewKerr_au738027/Beta diversity and novelty/Figures/kba_non_comparison_with.csv")
+pa_non_comparison <- read.csv("D://MatthewKerr_au738027/Beta diversity and novelty/Figures/pa_non_comparison_with.csv")
+
+pa_global_outside <- pa_non_comparison %>%
+  filter(trial > 0) %>%
+  group_by(pa) %>%
+  summarise(
+    noveltyexposure = mean(novelty, na.rm = TRUE)  # Handle NA values if necessary
+  ) %>%
+  mutate(type = "Unprotected",
+         region = "Global")
+
+pa_global_inside <- pa_non_comparison %>%
+  filter(trial == 0) %>%
+  group_by(pa) %>%
+  summarise(
+    noveltyexposure = mean(novelty, na.rm = TRUE)  # Handle NA values if necessary
+  ) %>%
+  mutate(type = "Protected",
+         region = "Global")
+
+pa_global <- bind_rows(pa_global_inside, pa_global_outside) %>%
+  pivot_wider(names_from = type, values_from = noveltyexposure) %>%
+  filter(!is.na(Unprotected))
+
+hedges_g(pa_global$Protected, pa_global$Unprotected, paired = T)
+
+pa_regions_outside <- pa_non_comparison %>%
+  filter(trial > 0) %>%
+  group_by(pa, region) %>%
+  summarise(
+    noveltyexposure = mean(novelty, na.rm = TRUE)  # Handle NA values if necessary
+  ) %>%
+  mutate(type = "Unprotected")
+
+pa_regions_inside <- pa_non_comparison %>%
+  filter(trial == 0) %>%
+  group_by(pa, region) %>%
+  summarise(
+    noveltyexposure = mean(novelty, na.rm = TRUE)  # Handle NA values if necessary
+  ) %>%
+  mutate(type = "Protected")
+
+pa_regions <- bind_rows(pa_regions_inside, pa_regions_outside) %>%
+  pivot_wider(names_from = type, values_from = noveltyexposure) %>%
+  filter(!is.na(Unprotected))
+
+pa_mod <- stats::t.test(pa_regions$Protected, pa_regions$Unprotected, paired = T)
+
+pa_region_pairwise <- data.frame(
+  region = "Global",
+  hedgesg = hedges_g(pa_global$Protected, pa_global$Unprotected, paired = T)$Hedges_g
+)
+
+for(i in unique(pa_regions$region)){
+  tempdf <- data.frame(region = i, 
+                       hedgesg = hedges_g(pa_regions$Protected[which(pa_regions$region == i)], pa_regions$Unprotected[which(pa_regions$region == i)], paired = T)$Hedges_g)
+  pa_region_pairwise <- rbind(pa_region_pairwise, tempdf)
+  
+}
+
+
+pa_region_pairwise$xpos <- c(6, 4, 1, 2, 3, 5)
+pa_region_pairwise$ypos <- rep(0.75, 6)
+
+hedges_g(pa_regions$Protected, pa_regions$Unprotected, paired = T)
+
+pa_total <- rbind(pa_regions_inside, pa_regions_outside, pa_global_inside, pa_global_outside)
+pa_total$region <- factor(pa_total$region, levels = c("Polar", "Cold", "Temperate", "Arid", "Tropical", "Global"))
+pa_total$type <- as.factor(pa_total$type)
+
+## KBAs:
+kba_global_outside <- kba_non_comparison %>%
+  filter(trial > 0) %>%
+  group_by(pa) %>%
+  summarise(
+    noveltyexposure = mean(novelty, na.rm = TRUE)  # Handle NA values if necessary
+  ) %>%
+  mutate(type = "Outside Key Biodiversity Area",
+         region = "Global")
+
+kba_global_inside <- kba_non_comparison %>%
+  filter(trial == 0) %>%
+  group_by(pa) %>%
+  summarise(
+    noveltyexposure = mean(novelty, na.rm = TRUE)  # Handle NA values if necessary
+  ) %>%
+  mutate(type = "Key Biodiversity Area",
+         region = "Global")
+
+kba_global <- bind_rows(kba_global_inside, kba_global_outside) %>%
+  pivot_wider(names_from = type, values_from = noveltyexposure) %>%
+  filter(!is.na('Outside Key Biodiversity Area'))
+
+hedges_g(kba_global$'Key Biodiversity Area', kba_global$'Outside Key Biodiversity Area', paired = T)
+
+kba_regions_outside <- kba_non_comparison %>%
+  filter(trial > 0) %>%
+  group_by(pa, region) %>%
+  summarise(
+    noveltyexposure = mean(novelty, na.rm = TRUE)  # Handle NA values if necessary
+  ) %>%
+  mutate(type = "Outside Key Biodiversity Area")
+
+kba_regions_inside <- kba_non_comparison %>%
+  filter(trial == 0) %>%
+  group_by(pa, region) %>%
+  summarise(
+    noveltyexposure = mean(novelty, na.rm = TRUE)  # Handle NA values if necessary
+  ) %>%
+  mutate(type = "Key Biodiversity Area")
+
+kba_regions <- bind_rows(kba_regions_inside, kba_regions_outside) %>%
+  pivot_wider(names_from = type, values_from = noveltyexposure) %>%
+  filter(!is.na('Outside Key Biodiversity Area'))
+
+kba_mod <- stats::t.test(kba_regions$'Key Biodiversity Area', kba_regions$'Outside Key Biodiversity Area', paired = T)
+
+kba_region_pairwise <- data.frame(
+  region = "Global",
+  hedgesg = hedges_g(kba_global$'Key Biodiversity Area', kba_global$'Outside Key Biodiversity Area', paired = T)$Hedges_g
+)
+
+for(i in unique(kba_regions$region)){
+  tempdf <- data.frame(region = i, 
+                       hedgesg = hedges_g(pa_regions$Protected[which(pa_regions$region == i)], pa_regions$Unprotected[which(pa_regions$region == i)], paired = T)$Hedges_g)
+  kba_region_pairwise <- rbind(kba_region_pairwise, tempdf)
+  
+}
+
+
+kba_region_pairwise$xpos <- c(6, 4, 1, 2, 3, 5)
+kba_region_pairwise$ypos <- rep(0.75, 6)
+
+hedges_g(kba_regions$'Key Biodiversity Area', kba_regions$'Outside Key Biodiversity Area', paired = T)
+
+
+kba_total <- rbind(kba_regions_inside, kba_regions_outside, kba_global_inside, kba_global_outside)
+kba_total$region <- factor(kba_total$region, levels = c("Polar", "Cold", "Temperate", "Arid", "Tropical", "Global"))
+kba_total$type <- as.factor(kba_total$type)
+
