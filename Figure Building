@@ -1,0 +1,1090 @@
+# Information ----
+## Author: M R KERR
+## Last edit: 04-09-2024
+## Summary: Make the figures associated with the manuscript
+## Requires many outputs from code parts 1 and 2, I won't be loading them in here
+
+# Library ----
+
+library(tidyverse)
+library(tidyterra)
+library(scico)
+# remotes::install_github("AllanCameron/geomtextpath")
+library(geomtextpath)
+# devtools::install_github("kassambara/easyGgplot2")
+library(easyGgplot2) # This makes facets easier for my small brain to understand
+library(ggridges)
+library(tricolore)
+library(ggtern)
+library(patchwork)
+
+# Main Text Figures ----
+gc()
+
+# Figure 1 ----
+## Maps of total novelty and the relative contributions
+
+fig1a <- ggplot() + 
+  geom_spatraster(data = total.novelty, maxcell = 46638480, show.legend = F) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + ggtitle("a") + theme(text = element_text(size = 35))
+
+# # If you want a flat figure legend for presentations, rather than the ridge plot legendÆ
+# fig1a.presentationlegend <- ggplot() + 
+#   geom_spatraster(data = climate.novelty, show.legend = T) +
+#   scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+#   theme_void() + ggtitle("a") + theme(text = element_text(size = 35), 
+#                                       legend.position = "bottom",
+#                                       legend.key.size = unit(7.5, "line"))
+# 
+# ggsave(fig1a.presentationlegend, filename = "LEGENDONLY.png",
+#        width = 14, height = 9, dpi = 500)
+
+
+ridges.df <- data.frame(
+  TotalNovelty = total.novelty$Total[],
+  Group = 1
+)
+
+fig1a_legend <- ggplot() +
+  geom_density_ridges_gradient(data = ridges.df[which(!is.na(ridges.df$Total)),], 
+                               aes(x = Total, y = Group, fill = after_stat(x)), 
+                               show.legend = F, quantile_lines = T, quantiles = 2, linewidth = 1.5) + theme_minimal() + 
+  scale_fill_scico(direction = -1, palette = "roma") + ylab("") + 
+  xlab("Total Novelty Exposure") + theme(axis.title.y = element_blank(), 
+                                         axis.text.y = element_blank(), 
+                                         axis.line.y = element_blank(), 
+                                         panel.grid = element_blank(), 
+                                         axis.ticks.x = element_line(),
+                                         text = element_text(size = 35))
+
+
+
+
+novelty.contributions.df <- (as.data.frame(values(novelty.contributions)))
+names(novelty.contributions.df) <- c("Climate", "Defaunation", "Disruption")
+
+novelty.rgb.values <- Tricolore(novelty.contributions.df, breaks = Inf, show_data = FALSE,
+                                p1 = "Climate", p2 = "Defaunation", p3 = "Disruption")
+
+rgb.raster <- total.novelty
+rgb.raster[] <- novelty.rgb.values$rgb
+
+fig1b <- ggplot() + 
+  geom_spatraster_rgb(data = rgb.raster, maxcell = 46638480) + theme_void() +
+  ggtitle("b") + theme(text = element_text(size = 35))
+
+
+fig1b_legend <- novelty.rgb.values$key + theme(text = element_text(size = 35))
+
+
+### Figure 1 insets ----
+# Points of interest:
+
+## Latlon
+insetcrs <- (crs(rast("ModernNovelty/c1976_2000_0/koppen_geiger_0p1.tif")))
+
+## Flat projection
+rgb.insets <- rgb.raster %>%
+  project(., insetcrs)
+nov.insets <- total.novelty %>%
+  project(., insetcrs)
+
+## Europe
+euro.extent = terra::ext(-5.6, 10.3, 34.98,43.2)
+rgb.euro <- rgb.insets %>%
+  crop(euro.extent)
+
+fig1h <- ggplot() + 
+  geom_spatraster_rgb(data = rgb.euro, maxcell = ncell(rgb.euro)) + theme_void() +
+  ggtitle("h") + theme(text = element_text(size = 35))
+
+## South Amazon
+amaz.extent = terra::ext(-70.5, -33.7, -40.6,-5)
+rgb.amaz <- rgb.insets %>%
+  crop(amaz.extent)
+
+fig1c <- ggplot() + 
+  geom_spatraster_rgb(data = rgb.amaz, maxcell = ncell(rgb.amaz)) + theme_void() +
+  ggtitle("c") + theme(text = element_text(size = 35))
+
+
+## central NA
+na.extent = terra::ext(-124.7, -105.87, 32.1,45.9)
+rgb.na <- rgb.insets %>%
+  crop(na.extent)
+
+fig1d <- ggplot() + 
+  geom_spatraster_rgb(data = rgb.na, maxcell = ncell(rgb.na)) + theme_void() +
+  ggtitle("d") + theme(text = element_text(size = 35))
+
+
+## South Africa
+sa.extent = terra::ext(13.5, 36.3, -36.4,-22.3)
+rgb.sa <- rgb.insets %>%
+  crop(sa.extent)
+
+fig1e <- ggplot() + 
+  geom_spatraster_rgb(data = rgb.sa, maxcell = ncell(rgb.sa)) + theme_void() +
+  ggtitle("e") + theme(text = element_text(size = 35))
+
+
+
+## central Asia
+cas.extent = terra::ext(73.48, 96.3, 29.76, 42.0)
+rgb.cas <- rgb.insets %>%
+  crop(cas.extent)
+
+fig1f <- ggplot() + 
+  geom_spatraster_rgb(data = rgb.cas, maxcell = ncell(rgb.cas)) + theme_void() +
+  ggtitle("f") + theme(text = element_text(size = 35))
+
+
+## Australia/NZ
+aus.extent = terra::ext(143.5, 179.6, -48.1,-27.9)
+rgb.aus <- rgb.insets %>%
+  crop(aus.extent)
+
+fig1g <- ggplot() + 
+  geom_spatraster_rgb(data = rgb.aus, maxcell = ncell(rgb.aus)) + theme_void() +
+  ggtitle("g") + theme(text = element_text(size = 35))
+
+
+### Novelty values
+
+## Europe
+nov.euro <- nov.insets %>%
+  crop(euro.extent)
+
+fig1_nh <- ggplot() + 
+  geom_spatraster(data = nov.euro, maxcell = ncell(nov.euro), show.legend = F) + theme_void() +
+  ggtitle("h") + theme(text = element_text(size = 35)) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + ggtitle("h") + theme(text = element_text(size = 35))
+
+
+## South Amazon
+amaz.extent = terra::ext(-70.5, -33.7, -40.6,-5)
+nov.amaz <- nov.insets %>%
+  crop(amaz.extent)
+
+fig1_nc <- ggplot() + 
+  geom_spatraster(data = nov.amaz, maxcell = ncell(nov.amaz), show.legend = F) + theme_void() +
+  ggtitle("c") + theme(text = element_text(size = 35)) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+## central NA
+na.extent = terra::ext(-124.7, -105.87, 32.1,45.9)
+nov.na <- nov.insets %>%
+  crop(na.extent)
+
+fig1_nd <- ggplot() + 
+  geom_spatraster(data = nov.na, maxcell = ncell(nov.na), show.legend = F) + theme_void() +
+  ggtitle("d") + theme(text = element_text(size = 35)) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+## South Africa
+sa.extent = terra::ext(13.5, 36.3, -36.4,-22.3)
+nov.sa <- nov.insets %>%
+  crop(sa.extent)
+
+fig1_ne <- ggplot() + 
+  geom_spatraster(data = nov.sa, maxcell = ncell(nov.sa), show.legend = F) + theme_void() +
+  ggtitle("e") + theme(text = element_text(size = 35)) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+
+## central Asia
+cas.extent = terra::ext(73.48, 96.3, 29.76, 42.0)
+nov.cas <- nov.insets %>%
+  crop(cas.extent)
+
+fig1_nf <- ggplot() + 
+  geom_spatraster(data = nov.cas, maxcell = ncell(nov.cas), show.legend = F) + theme_void() +
+  ggtitle("f") + theme(text = element_text(size = 35)) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+## Australia/NZ
+aus.extent = terra::ext(143.5, 179.6, -48.1,-27.9)
+nov.aus <- nov.insets %>%
+  crop(aus.extent)
+
+fig1_ng <- ggplot() + 
+  geom_spatraster(data = nov.aus, maxcell = ncell(nov.aus), show.legend = F) + theme_void() +
+  ggtitle("g") + theme(text = element_text(size = 35)) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+#### Draw fig1b with insets boxes ----
+amaz.box <- amaz.extent %>%
+  as.polygons()
+crs(amaz.box) <- insetcrs
+
+amaz.box <- project(amaz.box, crs(rgb.raster)) %>%
+  st_as_sf()
+
+euro.box <- euro.extent %>%
+  as.polygons()
+crs(euro.box) <- insetcrs
+
+euro.box <- project(euro.box, crs(rgb.raster)) %>%
+  st_as_sf()
+
+na.box <- na.extent %>%
+  as.polygons()
+crs(na.box) <- insetcrs
+
+na.box <- project(na.box, crs(rgb.raster)) %>%
+  st_as_sf()
+
+sa.box <- sa.extent %>%
+  as.polygons()
+crs(sa.box) <- insetcrs
+
+sa.box <- project(sa.box, crs(rgb.raster)) %>%
+  st_as_sf()
+
+cas.box <- cas.extent %>%
+  as.polygons()
+crs(cas.box) <- insetcrs
+
+cas.box <- project(cas.box, crs(rgb.raster)) %>%
+  st_as_sf()
+
+aus.box <- aus.extent %>%
+  as.polygons()
+crs(aus.box) <- insetcrs
+
+aus.box <- project(aus.box, crs(rgb.raster)) %>%
+  st_as_sf()
+
+fig1a_annotated <- ggplot() + 
+  geom_spatraster(data = total.novelty, maxcell = 46638480, show.legend = F) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + ggtitle("a") + theme(text = element_text(size = 35)) +
+  geom_sf(data = na.box, fill = NA, linewidth = 1) +
+  geom_sf(data = euro.box, fill = NA, linewidth = 1) +
+  geom_sf(data = cas.box, fill = NA, linewidth = 1) +
+  geom_sf(data = amaz.box, fill = NA, linewidth = 1) +
+  geom_sf(data = sa.box, fill = NA, linewidth = 1) +
+  geom_sf(data = aus.box, fill = NA, linewidth = 1)
+
+fig1b_annotated <- ggplot() + 
+  geom_spatraster_rgb(data = rgb.raster, maxcell = 46638480) + theme_void() +
+  ggtitle("b") + theme(text = element_text(size = 35)) +
+  geom_sf(data = na.box, fill = NA, linewidth = 1) +
+  geom_sf(data = euro.box, fill = NA, linewidth = 1) +
+  geom_sf(data = cas.box, fill = NA, linewidth = 1) +
+  geom_sf(data = amaz.box, fill = NA, linewidth = 1) +
+  geom_sf(data = sa.box, fill = NA, linewidth = 1) +
+  geom_sf(data = aus.box, fill = NA, linewidth = 1)
+
+
+### Figure ED1 ----
+# Maps of the individual dimensions
+figED1a <- ggplot() + 
+  geom_spatraster(data = climate.novelty, maxcell = 46638480, show.legend = F) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+ridges.df <- data.frame(
+  TotalNovelty = climate.novelty$Climate[],
+  Group = 1
+)
+
+figED1a_legend <- ggplot() +
+  geom_density_ridges_gradient(data = ridges.df[which(!is.na(ridges.df$Climate)),], 
+                               aes(x = Climate, y = Group, fill = after_stat(x)), 
+                               show.legend = F, quantile_lines = T, quantiles = 2, linewidth = 1.5) + theme_minimal() + 
+  scale_fill_scico(direction = -1, palette = "roma") + ylab("") + 
+  xlab("Climate Change Novelty") + theme(axis.title.y = element_blank(), 
+                                         axis.text.y = element_blank(), 
+                                         axis.line.y = element_blank(), 
+                                         panel.grid = element_blank(), 
+                                         axis.ticks.x = element_line(),
+                                         text = element_text(size = 55))
+
+
+figED1b <- ggplot() + 
+  geom_spatraster(data = defaunation.novelty, maxcell = 46638480, show.legend = T) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+
+ridges.df <- data.frame(
+  TotalNovelty = defaunation.novelty$Defaunation[],
+  Group = 1
+)
+
+figED1b_legend <- ggplot() +
+  geom_density_ridges_gradient(data = ridges.df[which(!is.na(ridges.df$Defaunation)),], 
+                               aes(x = Defaunation, y = Group, fill = after_stat(x)), 
+                               show.legend = F, quantile_lines = T, quantiles = 2, linewidth = 1.5) + theme_minimal() + 
+  scale_fill_scico(direction = -1, palette = "roma") + ylab("") + 
+  xlab("Defaunation Novelty") + theme(axis.title.y = element_blank(), 
+                                      axis.text.y = element_blank(), 
+                                      axis.line.y = element_blank(), 
+                                      panel.grid = element_blank(), 
+                                      axis.ticks.x = element_line(),
+                                      text = element_text(size = 55))
+
+
+figED1c <- ggplot() + 
+  geom_spatraster(data = change.novelty, maxcell = 46638480, show.legend = F) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+ridges.df <- data.frame(
+  TotalNovelty = change.novelty$`Community Change`[],
+  Group = 1
+)
+
+figED1c_legend <- ggplot() +
+  geom_density_ridges_gradient(data = ridges.df[which(!is.na(ridges.df$Community.Change)),], 
+                               aes(x = Community.Change, y = Group, fill = after_stat(x)), 
+                               show.legend = F, quantile_lines = T, quantiles = 2, linewidth = 1.5) + theme_minimal() + 
+  scale_fill_scico(direction = -1, palette = "roma") + ylab("") + 
+  xlab("Disruption Novelty") + theme(axis.title.y = element_blank(), 
+                                     axis.text.y = element_blank(), 
+                                     axis.line.y = element_blank(), 
+                                     panel.grid = element_blank(), 
+                                     axis.ticks.x = element_line(),
+                                     text = element_text(size = 55))
+
+
+# Figure 2 ----
+## Boxplot of climate regions
+
+novelty.climate_regions$ClimateRegion <- factor(novelty.climate_regions$ClimateRegion, levels = c("Polar", "Cold", "Temperate", "Arid", "Tropical", "Global"))
+
+novelty.climate_regions_global <- novelty.climate_regions
+novelty.climate_regions_global$ClimateRegion <- "Global"
+
+novelty.climate_regions <- rbind(novelty.climate_regions, novelty.climate_regions_global)
+
+novelty.climate_regions$Biome <- factor(novelty.climate_regions$Biome, levels = c(biome_region.key1[,3], "Global"))
+
+novelty.climate_regions$Biome[which(novelty.climate_regions$ClimateRegion == "Global")] <- "Global"
+
+fig2a <- ggplot(data = novelty.climate_regions[which(!is.na(novelty.climate_regions$ClimateRegion)),]) +
+  geom_boxplot(aes(x = ClimateRegion, y = Total), show.legend = F) +
+  theme_bw() + theme(text = element_text(size = 35)) + 
+  xlab("Climate Region") + ylab("Total Novelty Exposure") + ggtitle("a") + 
+  geom_vline(xintercept = 5.5, size = 2)
+
+
+
+
+### ED Figure: Break downs
+novelty.climate_regions.climate <- novelty.climate_regions
+novelty.climate_regions.climate$Metric <- novelty.climate_regions.climate$Climate / 3
+novelty.climate_regions.climate$Group <- "Climate Change"
+
+novelty.climate_regions.defaun <- novelty.climate_regions
+novelty.climate_regions.defaun$Metric <- novelty.climate_regions.defaun$Defaunation / 3
+novelty.climate_regions.defaun$Group <- "Defaunation"
+
+novelty.climate_regions.change <- novelty.climate_regions
+novelty.climate_regions.change$Metric <- novelty.climate_regions.change$Community / 3
+novelty.climate_regions.change$Group <- "Floristic Disruption"
+
+novelty.climate_regions.breakdown <- rbind(novelty.climate_regions.climate,
+                                           novelty.climate_regions.defaun,
+                                           novelty.climate_regions.change)
+
+novelty.climate_regions.breakdown$Group <- factor(novelty.climate_regions.breakdown$Group,
+                                                  levels = c("Climate Change", "Defaunation", "Floristic Disruption"))
+
+fig2b <- ggplot(data = novelty.climate_regions.breakdown[which(!is.na(novelty.climate_regions.breakdown$ClimateRegion)),]) +
+  geom_boxplot(aes(x = ClimateRegion, y = Metric, fill = Group), show.legend = T, alpha = 0.8) +
+  theme_bw() + scale_fill_manual(values = c("#D29243", "#1B5961", "#FACCFA"), name = "Novelty Driver: ") + theme(text = element_text(size = 35),
+                                                                                                                 legend.key.size = unit(4, "line"), legend.position = "bottom") + 
+  xlab("Climate Region") + ylab("Contriubtion to Total Novelty") + ggtitle("b") +
+  geom_vline(xintercept = 5.5, size = 2)
+
+
+# Figure 3 ----
+## WDPA and KBA novelty boxplots
+
+fig3a <- ggplot(data = pa_total) + 
+  geom_boxplot(aes(x = region, y = noveltyexposure, fill = type), alpha = 0.7) +
+  scale_fill_manual(name = "Protection Status", values = c("#A86690", "#595481")) + 
+  theme_bw() + xlab("") + ylab("Total Novelty Exposure") + ggtitle("a") +
+  geom_vline(xintercept = 5.5, linewidth = 3) +
+  geom_text(data = pa_region_pairwise, 
+            aes(x = xpos, y = ypos, label = sprintf('%.2f', hedgesg))) +
+  theme(text = element_text(size = 15))
+
+
+fig3b <- ggplot(data = kba_total) + 
+  geom_boxplot(aes(x = region, y = noveltyexposure, fill = type), alpha = 0.8) +
+  scale_fill_manual(name = "Key Biodiversity Area Status", values = c("#FFE5AD", "#003B47")) + 
+  theme_bw() + xlab("Climate Region") + ylab("Total Novelty Exposure") + ggtitle("b") +
+  geom_vline(xintercept = 5.5, linewidth = 3) +
+  geom_text(data = kba_region_pairwise, 
+            aes(x = xpos, y = ypos, label = sprintf('%.2f', hedgesg))) +
+  theme(text = element_text(size = 15))
+
+
+fig3b
+
+
+fig3a / fig3b
+
+
+
+# Extended Data Figures ----
+
+# ED 1 ----
+## ED1 is just fig1a without insets
+figED1 <- ggplot() + 
+  geom_spatraster(data = total.novelty, maxcell = 46638480, show.legend = F) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+ridges.df <- data.frame(
+  TotalNovelty = total.novelty$Total[],
+  Group = 1
+)
+
+figED1_legend <- ggplot() +
+  geom_density_ridges_gradient(data = ridges.df[which(!is.na(ridges.df$Total)),], 
+                               aes(x = Total, y = Group, fill = after_stat(x)), 
+                               show.legend = F, quantile_lines = T, quantiles = 2, linewidth = 1.5) + theme_minimal() + 
+  scale_fill_scico(direction = -1, palette = "roma") + ylab("") + 
+  xlab("Total Novelty Exposure") + theme(axis.title.y = element_blank(), 
+                                         axis.text.y = element_blank(), 
+                                         axis.line.y = element_blank(), 
+                                         panel.grid = element_blank(), 
+                                         axis.ticks.x = element_line(),
+                                         text = element_text(size = 35))
+
+# ED 2 ----
+## ED2 is just fig1b without insets
+novelty.contributions.df <- (as.data.frame(values(novelty.contributions)))
+names(novelty.contributions.df) <- c("Climate", "Defaunation", "Disruption")
+
+novelty.rgb.values <- Tricolore(novelty.contributions.df, breaks = Inf, show_data = FALSE,
+                                p1 = "Climate", p2 = "Defaunation", p3 = "Disruption")
+
+rgb.raster <- total.novelty
+rgb.raster[] <- novelty.rgb.values$rgb
+
+figED2 <- ggplot() + 
+  geom_spatraster_rgb(data = rgb.raster, maxcell = 46638480) + theme_void() +
+  theme(text = element_text(size = 35))
+
+
+figED2_legend <- novelty.rgb.values$key + theme(text = element_text(size = 35))
+
+# ED 3 ----
+## ED3 is each of the individual maps, with ridges:
+figED3a <- ggplot() + 
+  geom_spatraster(data = climate.novelty, maxcell = 46638480, show.legend = F) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+ridges.df <- data.frame(
+  TotalNovelty = climate.novelty$Climate[],
+  Group = 1
+)
+
+figED3a_legend <- ggplot() +
+  geom_density_ridges_gradient(data = ridges.df[which(!is.na(ridges.df$Climate)),], 
+                               aes(x = Climate, y = Group, fill = after_stat(x)), 
+                               show.legend = F, quantile_lines = T, quantiles = 2, linewidth = 1.5) + theme_minimal() + 
+  scale_fill_scico(direction = -1, palette = "roma") + ylab("") + 
+  xlab("Climate Change Novelty") + theme(axis.title.y = element_blank(), 
+                                         axis.text.y = element_blank(), 
+                                         axis.line.y = element_blank(), 
+                                         panel.grid = element_blank(), 
+                                         axis.ticks.x = element_line(),
+                                         text = element_text(size = 55))
+
+figED3b <- ggplot() + 
+  geom_spatraster(data = defaunation.novelty, maxcell = 46638480, show.legend = T) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+
+ridges.df <- data.frame(
+  TotalNovelty = defaunation.novelty$Defaunation[],
+  Group = 1
+)
+
+figED3b_legend <- ggplot() +
+  geom_density_ridges_gradient(data = ridges.df[which(!is.na(ridges.df$Defaunation)),], 
+                               aes(x = Defaunation, y = Group, fill = after_stat(x)), 
+                               show.legend = F, quantile_lines = T, quantiles = 2, linewidth = 1.5) + theme_minimal() + 
+  scale_fill_scico(direction = -1, palette = "roma") + ylab("") + 
+  xlab("Defaunation Novelty") + theme(axis.title.y = element_blank(), 
+                                      axis.text.y = element_blank(), 
+                                      axis.line.y = element_blank(), 
+                                      panel.grid = element_blank(), 
+                                      axis.ticks.x = element_line(),
+                                      text = element_text(size = 55))
+
+figED3c <- ggplot() + 
+  geom_spatraster(data = change.novelty, maxcell = 46638480, show.legend = F) +
+  scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+  theme_void() + theme(text = element_text(size = 35))
+
+
+ridges.df <- data.frame(
+  TotalNovelty = change.novelty$`Community Change`[],
+  Group = 1
+)
+
+figED3c_legend <- ggplot() +
+  geom_density_ridges_gradient(data = ridges.df[which(!is.na(ridges.df$Community.Change)),], 
+                               aes(x = Community.Change, y = Group, fill = after_stat(x)), 
+                               show.legend = F, quantile_lines = T, quantiles = 2, linewidth = 1.5) + theme_minimal() + 
+  scale_fill_scico(direction = -1, palette = "roma") + ylab("") + 
+  xlab("Disruption Novelty") + theme(axis.title.y = element_blank(), 
+                                     axis.text.y = element_blank(), 
+                                     axis.line.y = element_blank(), 
+                                     panel.grid = element_blank(), 
+                                     axis.ticks.x = element_line(),
+                                     text = element_text(size = 55))
+
+
+# ED 4 ----
+
+# I want the density triangles to be %s of the total, so I make a special function which defines this
+# Sadly this is a lot of faff. We have to define each function for each plot individually
+# These take an annoyingly long time to plot
+
+### Global triangle:
+
+special.function.tern <- function(x){
+  return(sum(x)/nrow(novelty.climate_regions))
+}
+
+global.tern <- ggtern(data = novelty.climate_regions, aes(Climate,Defaunation,Community), colour = "black") +
+  geom_tri_tern(fun = special.function.tern, bins = 50,  show.legend = T) + scale_fill_scico(na.value = "white", direction = -1, palette = "lajolla", name = "Proportion of cells") +
+  theme_bw() + Rlab("Disruption") + Llab("Climate") + Tlab("Disruption") + ggtitle("Global") + 
+  theme_arrowlarge() + ggtern::theme_notitles() + theme(tern.axis.arrow = element_line(size = 3), tern.axis.arrow.text = element_text(size = 20), 
+                                                        legend.key.size = unit(2, 'cm'), 
+                                                        legend.key.height = unit(2, 'cm'), 
+                                                        legend.key.width = unit(2, 'cm'), #
+                                                        legend.title = element_text(size=14), 
+                                                        legend.text = element_text(size=14), title = element_text(size = 20))
+
+
+
+### Tropical triangle:
+
+special.function.tern <- function(x){
+  return(sum(x)/nrow(novelty.climate_regions[which(novelty.climate_regions$ClimateRegion == "Tropical"),]))
+}
+
+trop.tern <- ggtern(data = novelty.climate_regions[which(novelty.climate_regions$ClimateRegion == "Tropical"),], aes(Climate,Defaunation,Community), colour = "black") +
+  geom_tri_tern(fun = special.function.tern, bins = 50,  show.legend = T) + scale_fill_scico(na.value = "white", direction = -1, palette = "lajolla", name = "Proportion of cells") +
+  theme_bw() + Rlab("Disruption") + Llab("Climate") + Tlab("Defaunation") + ggtitle("Tropical") + 
+  theme_arrowlarge() + ggtern::theme_notitles() + theme(tern.axis.arrow = element_line(size = 3), tern.axis.arrow.text = element_text(size = 20), 
+                                                        legend.key.size = unit(2, 'cm'), 
+                                                        legend.key.height = unit(2, 'cm'), 
+                                                        legend.key.width = unit(2, 'cm'), #
+                                                        legend.title = element_text(size=14), 
+                                                        legend.text = element_text(size=14), title = element_text(size = 20))
+### Temperate triangle:
+
+special.function.tern <- function(x){
+  return(sum(x)/nrow(novelty.climate_regions[which(novelty.climate_regions$ClimateRegion == "Temperate"),]))
+}
+
+temp.tern <- ggtern(data = novelty.climate_regions[which(novelty.climate_regions$ClimateRegion == "Temperate"),], aes(Climate,Defaunation,Community), colour = "black") +
+  geom_tri_tern(fun = special.function.tern, bins = 50,  show.legend = T) + scale_fill_scico(na.value = "white", direction = -1, palette = "lajolla", name = "Proportion of cells") +
+  theme_bw() + Rlab("Disruption") + Llab("Climate") + Tlab("Defaunation") + ggtitle("Temperate") + 
+  theme_arrowlarge() + ggtern::theme_notitles() + theme(tern.axis.arrow = element_line(size = 3), tern.axis.arrow.text = element_text(size = 20), 
+                                                        legend.key.size = unit(2, 'cm'), 
+                                                        legend.key.height = unit(2, 'cm'), 
+                                                        legend.key.width = unit(2, 'cm'), #
+                                                        legend.title = element_text(size=14), 
+                                                        legend.text = element_text(size=14), title = element_text(size = 20))
+### Arid triangle:
+
+special.function.tern <- function(x){
+  return(sum(x)/nrow(novelty.climate_regions[which(novelty.climate_regions$ClimateRegion == "Arid"),]))
+}
+
+arid.tern <- ggtern(data = novelty.climate_regions[which(novelty.climate_regions$ClimateRegion == "Arid"),], aes(Climate,Defaunation,Community), colour = "black") +
+  geom_tri_tern(fun = special.function.tern, bins = 50,  show.legend = T) + scale_fill_scico(na.value = "white", direction = -1, palette = "lajolla", name = "Proportion of cells") +
+  theme_bw() + Rlab("Disruption") + Llab("Climate") + Tlab("Defaunation") + ggtitle("Arid") + 
+  theme_arrowlarge() + ggtern::theme_notitles() + theme(tern.axis.arrow = element_line(size = 3), tern.axis.arrow.text = element_text(size = 20), 
+                                                        legend.key.size = unit(2, 'cm'), 
+                                                        legend.key.height = unit(2, 'cm'), 
+                                                        legend.key.width = unit(2, 'cm'), #
+                                                        legend.title = element_text(size=14), 
+                                                        legend.text = element_text(size=14), title = element_text(size = 20))
+### Cold triangle:
+
+special.function.tern <- function(x){
+  return(sum(x)/nrow(novelty.climate_regions[which(novelty.climate_regions$ClimateRegion == "Cold"),]))
+}
+
+cold.tern <- ggtern(data = novelty.climate_regions[which(novelty.climate_regions$ClimateRegion == "Cold"),], aes(Climate,Defaunation,Community), colour = "black") +
+  geom_tri_tern(fun = special.function.tern, bins = 50,  show.legend = T) + scale_fill_scico(na.value = "white", direction = -1, palette = "lajolla", name = "Proportion of cells") +
+  theme_bw() + Rlab("Disruption") + Llab("Climate") + Tlab("Defaunation") + ggtitle("Cold") + 
+  theme_arrowlarge() + ggtern::theme_notitles() + theme(tern.axis.arrow = element_line(size = 3), tern.axis.arrow.text = element_text(size = 20), 
+                                                        legend.key.size = unit(2, 'cm'), 
+                                                        legend.key.height = unit(2, 'cm'), 
+                                                        legend.key.width = unit(2, 'cm'), #
+                                                        legend.title = element_text(size=14), 
+                                                        legend.text = element_text(size=14), title = element_text(size = 20))
+
+### Polar triangle:
+
+special.function.tern <- function(x){
+  return(sum(x)/nrow(novelty.climate_regions[which(novelty.climate_regions$ClimateRegion == "Polar"),]))
+}
+
+polar.tern <- ggtern(data = novelty.climate_regions[which(novelty.climate_regions$ClimateRegion == "Polar"),], aes(Climate,Defaunation,Community), colour = "black") +
+  geom_tri_tern(fun = special.function.tern, bins = 50,  show.legend = T) + scale_fill_scico(na.value = "white", direction = -1, palette = "lajolla", name = "Proportion of cells") +
+  theme_bw() + Rlab("Disruption") + Llab("Climate") + Tlab("Defaunation") + ggtitle("Polar") + 
+  theme_arrowlarge() + ggtern::theme_notitles() + theme(tern.axis.arrow = element_line(size = 3), tern.axis.arrow.text = element_text(size = 20), 
+                                                        legend.key.size = unit(2, 'cm'), 
+                                                        legend.key.height = unit(2, 'cm'), 
+                                                        legend.key.width = unit(2, 'cm'), #
+                                                        legend.title = element_text(size=14), 
+                                                        legend.text = element_text(size=14), title = element_text(size = 20))
+
+
+# ED 5 ----
+# # Code for plotting the alternative maps in figure ED 5
+# This will need to use different calculations of the object total.novelty, outlined in code part 2
+
+ fig5EDa <- ggplot() +
+   geom_spatraster(data = total.novelty, maxcell = 46638480, show.legend = F) +
+   scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+   theme_void() + ggtitle("a") + theme(text = element_text(size = 35))
+
+ fig5EDa_legend <- ggplot() +
+   geom_density_ridges_gradient(data = ridges.df[which(!is.na(ridges.df$Total)),],
+                                aes(x = Total, y = Group, fill = after_stat(x)),
+                                show.legend = F, quantile_lines = T, quantiles = 2, linewidth = 1.5) + theme_minimal() +
+   scale_fill_scico(direction = -1, palette = "roma") + ylab("") +
+   xlab("Total Novelty Exposure") + theme(axis.title.y = element_blank(),
+                                          axis.text.y = element_blank(),
+                                          axis.line.y = element_blank(),
+                                          panel.grid = element_blank(),
+                                          axis.ticks.x = element_line(),
+                                          text = element_text(size = 35))
+
+ fig5EDb <- ggplot() +
+   geom_spatraster(data = total.novelty, maxcell = 46638480, show.legend = F) +
+   scale_fill_scico(na.value = "transparent", direction = -1, palette = "roma") +
+   theme_void() + ggtitle("b") + theme(text = element_text(size = 35))
+
+ fig5EDb_legend <- ggplot() +
+   geom_density_ridges_gradient(data = ridges.df[which(!is.na(ridges.df$Total)),],
+                                aes(x = Total, y = Group, fill = after_stat(x)),
+                                show.legend = F, quantile_lines = T, quantiles = 2, linewidth = 1.5) + theme_minimal() +
+   scale_fill_scico(direction = -1, palette = "roma") + ylab("") +
+   xlab("Total Novelty Exposure") + theme(axis.title.y = element_blank(),
+                                          axis.text.y = element_blank(),
+                                          axis.line.y = element_blank(),
+                                          panel.grid = element_blank(),
+                                          axis.ticks.x = element_line(),
+                                          text = element_text(size = 35))
+
+
+# ED 6 ----
+ 
+ fig6EDa <- ggplot(data = novelty.climate_regions[which(!is.na(novelty.climate_regions$Biome)),]) +
+   geom_boxplot(aes(x = Biome, y = Total), show.legend = F) +
+   theme_bw() + theme(axis.text.x = element_text(angle = 45, vjust = 0.05), text = element_text(size = 25)) + 
+   xlab("Biome") + ylab("Total Novelty Exposure") + ggtitle("a") + 
+   geom_vline(xintercept = 21.5, size = 2)
+ 
+ 
+ fig6EDb <- ggplot(data = novelty.climate_regions.breakdown[which(!is.na(novelty.climate_regions.breakdown$Biome)),]) +
+   geom_boxplot(aes(x = Biome, y = Metric, fill = Group), show.legend = T, alpha = 0.8) +
+   theme_bw() + scale_fill_manual(values = c("#D29243", "#1B5961", "#FACCFA"), name = "Novelty Driver: ") + theme(axis.text.x = element_text(angle = 45, vjust = 0.05), text = element_text(size = 25),
+                                                                                                                  legend.key.size = unit(4, "line"), legend.position = "bottom") + 
+   xlab("Biome") + ylab("Contriubtion to Total Novelty") + ggtitle("b") +
+   geom_vline(xintercept = 21.5, size = 2)
+ 
+ 
+ # ED7 ----
+ 
+ # Create a data frame for faceting, grouped by metric
+ ## Global first
+ pa_global_outside_climate <- pa_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(climate, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Unprotected",
+          region = "Global",
+          metric = "Climate")
+ 
+ pa_global_inside_climate <- pa_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(climate, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Protected",
+          region = "Global",
+          metric = "Climate")
+ 
+ pa_global_outside_defaun <- pa_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(defaun, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Unprotected",
+          region = "Global",
+          metric = "Defaunation")
+ 
+ pa_global_inside_defaun <- pa_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(defaun, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Protected",
+          region = "Global",
+          metric = "Defaunation")
+ 
+ pa_global_outside_disrupt <- pa_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(disrupt, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Unprotected",
+          region = "Global",
+          metric = "Disruption")
+ 
+ pa_global_inside_disrupt <- pa_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(disrupt, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Protected",
+          region = "Global",
+          metric = "Disruption")
+ 
+ pa_global_breakdown <- rbind(pa_global_inside_disrupt, pa_global_outside_disrupt,
+                              pa_global_inside_defaun, pa_global_outside_defaun,
+                              pa_global_inside_climate, pa_global_outside_climate)
+ 
+ pa_global_breakdown$metric <- factor(pa_global_breakdown$metric, levels = c("Climate", "Defaunation", "Disruption"))
+ 
+ # And now for regions
+ pa_regions_outside_climate <- pa_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(climate, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Unprotected",
+          metric = "Climate")
+ 
+ pa_regions_inside_climate <- pa_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(climate, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Protected",
+          metric = "Climate")
+ 
+ pa_regions_outside_defaun <- pa_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(defaun, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Unprotected",
+          metric = "Defaunation")
+ 
+ pa_regions_inside_defaun <- pa_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(defaun, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Protected",
+          metric = "Defaunation")
+ 
+ pa_regions_outside_disrupt <- pa_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(disrupt, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Unprotected",
+          metric = "Disruption")
+ 
+ pa_regions_inside_disrupt <- pa_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(disrupt, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Protected",
+          metric = "Disruption")
+ 
+ pa_regions_breakdown <- rbind(pa_regions_inside_disrupt, pa_regions_outside_disrupt,
+                               pa_regions_inside_defaun, pa_regions_outside_defaun,
+                               pa_regions_inside_climate, pa_regions_outside_climate)
+ 
+ pa_regions_breakdown$metric <- factor(pa_regions_breakdown$metric, levels = c("Climate", "Defaunation", "Disruption"))
+ 
+ 
+ pa.breakdown <- rbind(pa_regions_breakdown, pa_global_breakdown)
+ 
+ pa.breakdown$noveltyexposure <- pa.breakdown$noveltyexposure / 3
+ 
+ pa.breakdown$region <- factor(pa.breakdown$region, levels = c("Polar", "Cold", "Temperate", "Arid", "Tropical", "Global"))
+ 
+ 
+ ## Pairwise effect sizes
+ place <- 1
+ for(j in unique(pa.breakdown$metric)){
+   for(i in unique(pa.breakdown$region)){
+     test <- pa.breakdown %>%
+       filter(metric == j, region == i) %>%
+       group_by(pa) %>%
+       pivot_wider(names_from = type,
+                   values_from = noveltyexposure)
+     
+     tempdf <- data.frame(region = i,
+                          metric = j,
+                          hedgesg = hedges_g(test$Protected, test$Unprotected)$Hedges_g)
+     
+     if(place == 1){
+       pa_region_pairwise <- tempdf
+       place <- 2
+     } else {
+       pa_region_pairwise <- rbind(pa_region_pairwise, tempdf)
+     }
+     
+   }
+ }
+ 
+ pa_region_pairwise$xpos <- rep(c(4, 1, 2, 3, 5, 6), 3)
+ pa_region_pairwise$ypos <- rep(0.4, nrow(pa_region_pairwise))
+ 
+ 
+ figED7 <- ggplot(data = pa.breakdown, aes(x = region, y = noveltyexposure, fill = type), alpha = 0.7) +
+   geom_boxplot() + scale_fill_manual(name = "Protection Status", values = c("#A86690", "#595481")) +
+   theme_bw() + geom_vline(xintercept = 5.5, size = 2) +
+   theme(text = element_text(size = 35), legend.key.size = unit(3, "line")) + ylab("Contriubtion to Total Novelty") + 
+   xlab("Climate Region") +
+   facet_wrap(~metric, ncol = 1, strip.position = "right") +
+   geom_text(data = pa_region_pairwise, aes(x = xpos, y = ypos, group = metric, label = sprintf('%.2f', hedgesg)), 
+             inherit.aes = F, size = 10)
+ 
+
+ 
+ ## Now repeat for kbas
+ 
+ kba_region_pairwise <- data.frame(
+   region = "Global",
+   hedgesg = hedges_g(kba_global$'Key Biodiversity Area', kba_global$'Outside Key Biodiversity Area', paired = T)$Hedges_g
+ )
+ for(i in unique(kba_regions$region)){
+   tempdf <- data.frame(region = i, 
+                        hedgesg = hedges_g(pa_regions$Protected[which(pa_regions$region == i)], pa_regions$Unprotected[which(pa_regions$region == i)], paired = T)$Hedges_g)
+   kba_region_pairwise <- rbind(kba_region_pairwise, tempdf)
+   
+ }
+ 
+ # ED8 ----
+ 
+ # Create a data frame for faceting, grouped by metric
+ ## Global first
+ kba_global_outside_climate <- kba_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(climate, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Outside Key Biodiversity Area",
+          region = "Global",
+          metric = "Climate")
+ 
+ kba_global_inside_climate <- kba_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(climate, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Key Biodiversity Area",
+          region = "Global",
+          metric = "Climate")
+ 
+ kba_global_outside_defaun <- kba_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(defaun, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Outside Key Biodiversity Area",
+          region = "Global",
+          metric = "Defaunation")
+ 
+ kba_global_inside_defaun <- kba_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(defaun, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Key Biodiversity Area",
+          region = "Global",
+          metric = "Defaunation")
+ 
+ kba_global_outside_disrupt <- kba_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(disrupt, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Outside Key Biodiversity Area",
+          region = "Global",
+          metric = "Disruption")
+ 
+ kba_global_inside_disrupt <- kba_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa) %>%
+   summarise(
+     noveltyexposure = mean(disrupt, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Key Biodiversity Area",
+          region = "Global",
+          metric = "Disruption")
+ 
+ kba_global_breakdown <- rbind(kba_global_inside_disrupt, kba_global_outside_disrupt,
+                               kba_global_inside_defaun, kba_global_outside_defaun,
+                               kba_global_inside_climate, kba_global_outside_climate)
+ 
+ kba_global_breakdown$metric <- factor(kba_global_breakdown$metric, levels = c("Climate", "Defaunation", "Disruption"))
+ 
+ # And now for regions
+ kba_regions_outside_climate <- kba_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(climate, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Outside Key Biodiversity Area",
+          metric = "Climate")
+ 
+ kba_regions_inside_climate <- kba_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(climate, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Key Biodiversity Area",
+          metric = "Climate")
+ 
+ kba_regions_outside_defaun <- kba_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(defaun, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Outside Key Biodiversity Area",
+          metric = "Defaunation")
+ 
+ kba_regions_inside_defaun <- kba_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(defaun, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Key Biodiversity Area",
+          metric = "Defaunation")
+ 
+ kba_regions_outside_disrupt <- kba_non_comparison %>%
+   filter(trial > 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(disrupt, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Outside Key Biodiversity Area",
+          metric = "Disruption")
+ 
+ kba_regions_inside_disrupt <- kba_non_comparison %>%
+   filter(trial == 0) %>%
+   group_by(pa, region) %>%
+   summarise(
+     noveltyexposure = mean(disrupt, na.rm = TRUE)  # Handle NA values if necessary
+   ) %>%
+   mutate(type = "Key Biodiversity Area",
+          metric = "Disruption")
+ 
+ kba_regions_breakdown <- rbind(kba_regions_inside_disrupt, kba_regions_outside_disrupt,
+                                kba_regions_inside_defaun, kba_regions_outside_defaun,
+                                kba_regions_inside_climate, kba_regions_outside_climate)
+ 
+ kba_regions_breakdown$metric <- factor(kba_regions_breakdown$metric, levels = c("Climate", "Defaunation", "Disruption"))
+ 
+ 
+ kba.breakdown <- rbind(kba_regions_breakdown, kba_global_breakdown)
+ 
+ kba.breakdown$noveltyexposure <- kba.breakdown$noveltyexposure / 3
+ 
+ kba.breakdown$region <- factor(kba.breakdown$region, levels = c("Polar", "Cold", "Temperate", "Arid", "Tropical", "Global"))
+ 
+ 
+ ## Pairwise effect sizes
+ place <- 1
+ for(j in unique(kba.breakdown$metric)){
+   for(i in unique(kba.breakdown$region)){
+     test <- kba.breakdown %>%
+       filter(metric == j, region == i) %>%
+       group_by(pa) %>%
+       pivot_wider(names_from = type,
+                   values_from = noveltyexposure)
+     
+     tempdf <- data.frame(region = i,
+                          metric = j,
+                          hedgesg = hedges_g(test$'Key Biodiversity Area', test$'Outside Key Biodiversity Area')$Hedges_g)
+     
+     if(place == 1){
+       kba_region_pairwise <- tempdf
+       place <- 2
+     } else {
+       kba_region_pairwise <- rbind(kba_region_pairwise, tempdf)
+     }
+     
+   }
+ }
+ 
+ kba_region_pairwise$xpos <- rep(c(4, 1, 2, 3, 5, 6), 3)
+ kba_region_pairwise$ypos <- rep(0.4, nrow(kba_region_pairwise))
+ 
+ 
+ figED8 <- ggplot(data = kba.breakdown, aes(x = region, y = noveltyexposure, fill = type), alpha = 0.8) +
+   geom_boxplot() + scale_fill_manual(name = "Key Biodiversity Area Status", values = c("#FFE5AD", "#003B47")) +
+   theme_bw() + geom_vline(xintercept = 5.5, size = 2) +
+   theme(text = element_text(size = 35), legend.key.size = unit(3, "line")) + ylab("Contriubtion to Total Novelty") + 
+   xlab("Climate Region") +
+   facet_wrap(~metric, ncol = 1, strip.position = "right") +
+   geom_text(data = kba_region_pairwise, aes(x = xpos, y = ypos, group = metric, label = sprintf('%.2f', hedgesg)), 
+             inherit.aes = F, size = 10)
+ 
+ 
